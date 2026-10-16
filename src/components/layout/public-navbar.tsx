@@ -24,6 +24,7 @@ import { restaurantInfo as fallbackRestaurantInfo } from '@/lib/mock-data';
 import { getCart } from '@/lib/cart';
 import { api } from '@/lib/api';
 import { getStoredUser, type CurrentUser } from '@/lib/auth';
+import { CustomerNotificationBell } from './customer-notifications';
 
 const navLinks = [
   { href: '/', label: 'Home' },
@@ -157,6 +158,9 @@ export function PublicNavbar() {
 
           {/* Right side actions */}
           <div className="flex items-center gap-2">
+            {/* Customer Notification Bell — only shows for logged-in customers */}
+            <CustomerNotificationBell />
+
             {/* Cart */}
             <Link
               href="/cart"

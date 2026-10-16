@@ -181,6 +181,9 @@ export default function OrdersPage() {
     // Real-time socket updates for customer orders
     const socket = getSocket();
     if (socket) {
+      // Join customer role room for kitchen state change notifications
+      socket.emit('join_role_room', 'customer');
+
       const handleOrderUpdate = (updatedOrder: any) => {
         setOrders((prev) =>
           prev.map((o) =>
@@ -196,12 +199,24 @@ export default function OrdersPage() {
         });
       };
 
+      // Listen for order updates with toast notifications for status changes
+      const handleCustomerUpdate = (data: any) => {
+        // Also update order data in state
+        if (data._id || data.id) {
+          handleOrderUpdate(data);
+        }
+        // Re-fetch orders to get the latest state
+        fetchOrders(stored, selectedOrderIdParam);
+      };
+
       socket.on('order:updated', handleOrderUpdate);
       socket.on('order:status-change', handleOrderUpdate);
+      socket.on('order:customer_update', handleCustomerUpdate);
 
       return () => {
         socket.off('order:updated', handleOrderUpdate);
         socket.off('order:status-change', handleOrderUpdate);
+        socket.off('order:customer_update', handleCustomerUpdate);
       };
     }
   }, [router, selectedOrderIdParam]);

@@ -97,7 +97,15 @@ export default function OrderTrackingPage() {
 
     const socket = getSocket();
     if (socket) {
-      socket.on('order:updated', (updated: any) => {
+      // Join customer role room for kitchen state change notifications
+      socket.emit('join_role_room', 'customer');
+
+      // Join specific order room for targeted updates
+      if (requestedOrderId) {
+        socket.emit('join_order_room', requestedOrderId);
+      }
+
+      const handleUpdate = (updated: any) => {
         if (!requestedOrderId || (updated._id || updated.id) === requestedOrderId) {
           setOrder((prev: any) => ({
             ...prev,
@@ -105,9 +113,14 @@ export default function OrderTrackingPage() {
             id: updated._id || updated.id,
           }));
         }
-      });
+      };
+
+      socket.on('order:updated', handleUpdate);
+      socket.on('order:customer_update', handleUpdate);
+
       return () => {
-        socket.off('order:updated');
+        socket.off('order:updated', handleUpdate);
+        socket.off('order:customer_update', handleUpdate);
       };
     }
   }, [requestedOrderId]);
