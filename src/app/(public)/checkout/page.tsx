@@ -16,6 +16,8 @@ import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
+import { StripePaymentModal } from '@/components/checkout/stripe-payment-modal';
+
 export default function CheckoutPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
@@ -29,6 +31,7 @@ export default function CheckoutPage() {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
+  const [stripeModalOpen, setStripeModalOpen] = useState(false);
 
   useEffect(() => {
     const user = getStoredUser();
@@ -53,12 +56,51 @@ export default function CheckoutPage() {
   const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
   const total = subtotal + tax + deliveryFee;
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const handleProceedToPayment = (e: React.FormEvent) => {
     e.preventDefault();
     if (cart.length === 0) {
       toast.error('Your cart is empty');
       return;
     }
+    if (!name.trim()) {
+      toast.error('Please enter your name');
+      return;
+    }
+    if (!phone.trim()) {
+      toast.error('Please enter your phone number');
+      return;
+    }
+    if (orderType === 'dine-in' && !tableNumber) {
+      toast.error('Please specify your table number');
+      return;
+    }
+    if (orderType === 'delivery' && !deliveryAddress.trim()) {
+      toast.error('Please enter your delivery address');
+      return;
+    }
+
+    // Cash selection: instantly receive payment and create order
+    if (paymentMethod === 'cash') {
+      executeOrderCreation({
+        payMethod: 'cash',
+        payStatus: 'paid',
+      });
+      return;
+    }
+
+    // Card, Mobile Banking & Bank Transfer: open authentic white Stripe modal
+    setStripeModalOpen(true);
+  };
+
+  const executeOrderCreation = async ({
+    payMethod,
+    payStatus,
+    stripePaymentIntentId,
+  }: {
+    payMethod: string;
+    payStatus: string;
+    stripePaymentIntentId?: string;
+  }) => {
     setSubmitting(true);
     try {
       const orderData = {
@@ -80,8 +122,9 @@ export default function CheckoutPage() {
         tax,
         deliveryFee,
         total,
-        paymentMethod,
-        paymentStatus: paymentMethod === 'cash' ? 'pending' : 'completed',
+        paymentMethod: payMethod,
+        paymentStatus: payStatus,
+        stripePaymentIntentId,
         notes,
       };
 
@@ -89,8 +132,15 @@ export default function CheckoutPage() {
       const orderId = res?.order?._id || res?.order?.id || res?.data?._id || res?.data?.id || 'ORD-NEW';
       setCreatedOrderId(orderId);
       clearCart();
-      toast.success('Order placed successfully!');
-      setTimeout(() => router.push(`/orders?orderId=${orderId}`), 2000);
+      setStripeModalOpen(false);
+
+      if (payMethod === 'cash') {
+        toast.success(`Order confirmed! Cash payment of ${formatCurrency(total)} instantly received.`);
+      } else {
+        toast.success(`Payment of ${formatCurrency(total)} confirmed via Stripe! Order placed successfully.`);
+      }
+
+      setTimeout(() => router.push(`/orders?orderId=${orderId}`), 1800);
     } catch (err: any) {
       toast.error(err?.message || 'Failed to place order');
     } finally {
@@ -101,11 +151,11 @@ export default function CheckoutPage() {
   if (createdOrderId) {
     return (
       <div className="mx-auto flex max-w-md flex-col items-center justify-center px-4 py-20 text-center">
-        <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-success/10 text-success">
+        <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-success/10 text-success animate-in zoom-in">
           <CheckCircle2 className="h-10 w-10" />
         </div>
-        <h2 className="font-display text-2xl font-bold">Order Confirmed!</h2>
-        <p className="mt-2 text-muted-foreground">Order #{createdOrderId} has been placed. Redirecting to order tracking...</p>
+        <h2 className="font-display text-2xl font-bold">Payment & Order Confirmed!</h2>
+        <p className="mt-2 text-muted-foreground">Order #{createdOrderId} has been received. Redirecting to live order tracking...</p>
       </div>
     );
   }
@@ -117,7 +167,7 @@ export default function CheckoutPage() {
       </Link>
       <h1 className="mb-8 font-display text-3xl font-bold">Checkout</h1>
 
-      <form onSubmit={handleSubmit} className="grid grid-cols-1 gap-6 lg:grid-cols-3">
+      <form onSubmit={handleProceedToPayment} className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2 space-y-6">
           {/* Order Type */}
           <Card>
@@ -240,13 +290,30 @@ export default function CheckoutPage() {
               {deliveryFee > 0 && <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>}
               <Separator />
               <div className="flex justify-between font-bold text-lg"><span>Total</span><span className="text-primary">{formatCurrency(total)}</span></div>
-              <Button type="submit" className="w-full" disabled={submitting || cart.length === 0}>
-                {submitting ? 'Placing Order...' : 'Place Order'}
+              <Button type="submit" className="w-full text-base font-bold h-11" disabled={submitting || cart.length === 0}>
+                {submitting ? 'Processing Payment...' : 'Proceed to Payment'}
               </Button>
             </CardContent>
           </Card>
         </div>
       </form>
+
+      {/* White Stripe Payment Modal for Card, Mobile Banking & Bank Transfer */}
+      <StripePaymentModal
+        open={stripeModalOpen}
+        onOpenChange={setStripeModalOpen}
+        amount={total}
+        paymentMethod={paymentMethod}
+        customerName={name}
+        customerEmail={email}
+        onSuccess={({ paymentMethod: confirmedMethod, stripePaymentIntentId }) => {
+          executeOrderCreation({
+            payMethod: confirmedMethod,
+            payStatus: 'paid',
+            stripePaymentIntentId,
+          });
+        }}
+      />
     </div>
   );
 }
