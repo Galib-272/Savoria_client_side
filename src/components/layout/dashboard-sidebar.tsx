@@ -21,6 +21,7 @@ import {
   Utensils,
   X,
   LogOut,
+  ChevronDown,
 } from 'lucide-react';
 import { useState, useEffect } from 'react';
 import { restaurantInfo as fallbackRestaurantInfo } from '@/lib/mock-data';
@@ -62,6 +63,10 @@ const allNavItems: NavItem[] = [
     label: 'POS / Cashier',
     icon: Receipt,
     roles: ['admin', 'manager', 'cashier'],
+    subItems: [
+      { href: '/dashboard/pos', label: 'POS Terminal' },
+      { href: '/dashboard/pos/transactions', label: 'Transaction History' },
+    ],
   },
   {
     href: '/dashboard/kitchen',
@@ -180,6 +185,21 @@ export function DashboardSidebar({ open, onClose }: DashboardSidebarProps) {
     .substring(0, 2)
     .toUpperCase();
 
+  // Keep sub-items for POS & Kitchen expanded by default for instant access
+  const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({
+    '/dashboard/pos': true,
+    '/dashboard/kitchen': true,
+  });
+
+  const toggleSubMenu = (e: React.MouseEvent, href: string) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setExpandedMenus((prev) => ({
+      ...prev,
+      [href]: !(prev[href] ?? true),
+    }));
+  };
+
   const handleLogout = () => {
     api.logout();
     router.push('/login');
@@ -223,37 +243,56 @@ export function DashboardSidebar({ open, onClose }: DashboardSidebarProps) {
         <nav className="flex-1 overflow-y-auto px-3 py-2">
           <div className="space-y-1">
             {visibleNavItems.map((item) => {
-              const isKitchenRoute = item.href === '/dashboard/kitchen' && pathname.startsWith('/dashboard/kitchen');
-              const isActive =
+              const isParentRoute =
                 item.href === '/dashboard'
                   ? pathname === '/dashboard'
-                  : item.subItems
-                  ? isKitchenRoute
                   : pathname === item.href || pathname.startsWith(item.href + '/');
+
+              const isExpanded = item.subItems
+                ? (expandedMenus[item.href] ?? isParentRoute)
+                : false;
 
               return (
                 <div key={item.href} className="space-y-1">
-                  <Link
-                    href={item.href}
-                    onClick={onClose}
-                    className={cn(
-                      'flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
-                      isActive
-                        ? 'bg-primary/10 text-primary font-semibold'
-                        : 'text-muted-foreground hover:bg-accent hover:text-foreground'
-                    )}
-                  >
-                    <item.icon className="h-5 w-5 shrink-0" />
-                    <span className="flex-1">{item.label}</span>
-                  </Link>
+                  <div className="flex items-center">
+                    <Link
+                      href={item.href}
+                      onClick={onClose}
+                      className={cn(
+                        'flex flex-1 items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition-colors',
+                        isParentRoute
+                          ? 'bg-primary/10 text-primary font-semibold'
+                          : 'text-muted-foreground hover:bg-accent hover:text-foreground'
+                      )}
+                    >
+                      <item.icon className="h-5 w-5 shrink-0" />
+                      <span className="flex-1">{item.label}</span>
+                    </Link>
 
-                  {/* Render sub-items if present and parent is active */}
-                  {item.subItems && isKitchenRoute && (
+                    {item.subItems && (
+                      <button
+                        type="button"
+                        onClick={(e) => toggleSubMenu(e, item.href)}
+                        className="rounded-md p-1.5 text-muted-foreground hover:bg-accent hover:text-foreground transition-colors mr-1"
+                        aria-label="Toggle submenu"
+                      >
+                        <ChevronDown
+                          className={cn(
+                            'h-4 w-4 transition-transform duration-200',
+                            !isExpanded && '-rotate-90'
+                          )}
+                        />
+                      </button>
+                    )}
+                  </div>
+
+                  {/* Render sub-items if present and expanded */}
+                  {item.subItems && isExpanded && (
                     <div className="ml-5 space-y-0.5 border-l-2 border-border pl-2 py-1">
                       {item.subItems.map((sub) => {
                         const isSubActive =
-                          sub.href === '/dashboard/kitchen'
-                            ? pathname === '/dashboard/kitchen'
+                          sub.href === item.href
+                            ? pathname === item.href
                             : pathname.startsWith(sub.href);
                         return (
                           <Link

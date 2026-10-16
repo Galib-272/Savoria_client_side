@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useState, useMemo } from 'react';
+import Link from 'next/link';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -138,9 +139,28 @@ export default function POSPage() {
 
   return (
     <div className="space-y-4">
-      <div>
-        <h1 className="font-display text-2xl font-bold">POS / Cashier</h1>
-        <p className="text-sm text-muted-foreground">Point of sale for fast order processing</p>
+      {/* Top Header & Switcher */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-border pb-3">
+        <div>
+          <h1 className="font-display text-2xl font-bold">POS / Cashier</h1>
+          <p className="text-sm text-muted-foreground">Point of sale for fast order processing & payments</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Link
+            href="/dashboard/pos"
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground shadow-sm"
+          >
+            <ShoppingCart className="h-4 w-4" />
+            <span>POS Terminal</span>
+          </Link>
+          <Link
+            href="/dashboard/pos/transactions"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium text-foreground hover:bg-accent transition-colors shadow-xs"
+          >
+            <Receipt className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
+            <span>Transaction History</span>
+          </Link>
+        </div>
       </div>
 
       <div className="grid grid-cols-1 gap-4 lg:grid-cols-3">

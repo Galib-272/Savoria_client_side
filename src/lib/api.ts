@@ -250,6 +250,12 @@ export const api = {
     });
   },
 
+  async getPayments(params?: Record<string, string>) {
+    const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
+    const res: any = await apiRequest(`/payments${queryString}`);
+    return res.data || [];
+  },
+
   async getReceipt(orderId: string) {
     const res: any = await apiRequest(`/payments/receipt/${orderId}`);
     return res.receipt;
