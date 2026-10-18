@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from 'react';
 import {
-  Lock,
   CreditCard,
   CheckCircle2,
   Loader2,
@@ -117,33 +116,40 @@ export function StripePaymentModal({
       : 'card'
   );
 
-  // Form states
-  const [email, setEmail] = useState(customerEmail || '');
-  const [cardNumber, setCardNumber] = useState('4242 4242 4242 4242');
-  const [expiry, setExpiry] = useState('12 / 28');
-  const [cvc, setCvc] = useState('123');
-  const [nameOnCard, setNameOnCard] = useState(customerName || 'Customer');
+  // Form states - blank by default so user can enter whatever they want
+  const [email, setEmail] = useState('');
+  const [cardNumber, setCardNumber] = useState('');
+  const [expiry, setExpiry] = useState('');
+  const [cvc, setCvc] = useState('');
+  const [nameOnCard, setNameOnCard] = useState('');
   const [country, setCountry] = useState('BD');
-  const [postalCode, setPostalCode] = useState('1212');
+  const [postalCode, setPostalCode] = useState('');
 
-  // Mobile Banking state
+  // Mobile Banking state - blank
   const [mobileProvider, setMobileProvider] = useState<'bkash' | 'nagad' | 'rocket'>('bkash');
-  const [mobileNumber, setMobileNumber] = useState('01700-123456');
-  const [mobilePin, setMobilePin] = useState('••••');
+  const [mobileNumber, setMobileNumber] = useState('');
+  const [mobilePin, setMobilePin] = useState('');
 
-  // Bank Transfer state
+  // Bank Transfer state - blank
   const [bankName, setBankName] = useState('City Bank PLC');
-  const [accountNumber, setAccountNumber] = useState('1102938475');
+  const [accountNumber, setAccountNumber] = useState('');
 
   // Status state
   const [status, setStatus] = useState<'idle' | 'processing' | 'success'>('idle');
 
-  // Lock background scroll when open
+  // Lock background scroll when open & reset all fields to completely blank
   useEffect(() => {
     if (open) {
       document.body.style.overflow = 'hidden';
-      if (customerEmail) setEmail(customerEmail);
-      if (customerName) setNameOnCard(customerName);
+      setEmail(customerEmail || '');
+      setCardNumber('');
+      setExpiry('');
+      setCvc('');
+      setNameOnCard('');
+      setPostalCode('');
+      setMobileNumber('');
+      setMobilePin('');
+      setAccountNumber('');
       setStatus('idle');
     } else {
       document.body.style.overflow = '';
@@ -151,7 +157,7 @@ export function StripePaymentModal({
     return () => {
       document.body.style.overflow = '';
     };
-  }, [open, customerEmail, customerName]);
+  }, [open, customerEmail]);
 
   if (!open) return null;
 
@@ -354,7 +360,6 @@ export function StripePaymentModal({
                 </label>
                 <input
                   type="email"
-                  required
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   placeholder="customer@example.com"
@@ -376,7 +381,6 @@ export function StripePaymentModal({
                       <div className="relative flex items-center px-3.5 h-11">
                         <input
                           type="text"
-                          required
                           value={cardNumber}
                           onChange={(e) => setCardNumber(e.target.value)}
                           placeholder="1234 1234 1234 1234"
@@ -394,7 +398,6 @@ export function StripePaymentModal({
                         <div className="px-3.5 h-11 flex items-center">
                           <input
                             type="text"
-                            required
                             value={expiry}
                             onChange={(e) => setExpiry(e.target.value)}
                             placeholder="MM / YY"
@@ -404,7 +407,6 @@ export function StripePaymentModal({
                         <div className="px-3.5 h-11 flex items-center justify-between">
                           <input
                             type="text"
-                            required
                             value={cvc}
                             onChange={(e) => setCvc(e.target.value)}
                             placeholder="CVC"
@@ -423,7 +425,6 @@ export function StripePaymentModal({
                     </label>
                     <input
                       type="text"
-                      required
                       value={nameOnCard}
                       onChange={(e) => setNameOnCard(e.target.value)}
                       placeholder="Full name on card"
@@ -582,7 +583,7 @@ export function StripePaymentModal({
                 <button
                   type="submit"
                   disabled={status === 'processing'}
-                  className="w-full h-12 rounded-lg bg-[#635bff] hover:bg-[#0a2540] active:scale-[0.99] disabled:opacity-75 disabled:pointer-events-none text-white text-base font-semibold shadow-[0_2px_4px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)] flex items-center justify-center gap-2 transition-all"
+                  className="w-full h-12 rounded-lg bg-[#635bff] hover:bg-[#0a2540] active:scale-[0.99] disabled:opacity-75 disabled:pointer-events-none text-white text-base font-semibold shadow-[0_2px_4px_rgba(0,0,0,0.08),0_1px_2px_rgba(0,0,0,0.06)] flex items-center justify-center gap-2 transition-all cursor-pointer"
                 >
                   {status === 'processing' ? (
                     <>
@@ -590,10 +591,7 @@ export function StripePaymentModal({
                       <span>Processing...</span>
                     </>
                   ) : (
-                    <>
-                      <Lock className="h-4 w-4" />
-                      <span>Pay {formatCurrency(amount)}</span>
-                    </>
+                    <span>Pay {formatCurrency(amount)}</span>
                   )}
                 </button>
               </div>
