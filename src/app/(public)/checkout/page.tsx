@@ -298,7 +298,7 @@ export default function CheckoutPage() {
         </div>
       </form>
 
-      {/* White Stripe Payment Modal for Card, Mobile Banking & Bank Transfer */}
+      {/* Real White Stripe Payment Page for Card, Mobile Banking & Bank Transfer */}
       <StripePaymentModal
         open={stripeModalOpen}
         onOpenChange={setStripeModalOpen}
@@ -306,6 +306,10 @@ export default function CheckoutPage() {
         paymentMethod={paymentMethod}
         customerName={name}
         customerEmail={email}
+        items={cart}
+        subtotal={subtotal}
+        tax={tax}
+        deliveryFee={deliveryFee}
         onSuccess={({ paymentMethod: confirmedMethod, stripePaymentIntentId }) => {
           executeOrderCreation({
             payMethod: confirmedMethod,
