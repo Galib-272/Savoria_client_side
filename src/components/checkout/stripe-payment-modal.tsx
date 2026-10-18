@@ -1,6 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   CreditCard,
   CheckCircle2,
@@ -91,7 +92,7 @@ interface StripePaymentModalProps {
   subtotal?: number;
   tax?: number;
   deliveryFee?: number;
-  onSuccess: (paymentData: { paymentMethod: string; stripePaymentIntentId: string }) => void;
+  onSuccess: (paymentData: { paymentMethod: string; stripePaymentIntentId: string }) => Promise<any> | any;
 }
 
 export function StripePaymentModal({
@@ -108,6 +109,7 @@ export function StripePaymentModal({
   deliveryFee = 0,
   onSuccess,
 }: StripePaymentModalProps) {
+  const router = useRouter();
   const [activeTab, setActiveTab] = useState<'card' | 'mobile' | 'bank'>(
     paymentMethod === 'mobile_banking'
       ? 'mobile'
@@ -161,28 +163,41 @@ export function StripePaymentModal({
 
   if (!open) return null;
 
-  const handlePay = (e: React.FormEvent) => {
+  const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (status === 'processing' || status === 'success') return;
 
     setStatus('processing');
 
-    setTimeout(() => {
+    try {
+      const res = await onSuccess({
+        paymentMethod:
+          activeTab === 'card'
+            ? 'card'
+            : activeTab === 'mobile'
+            ? 'mobile_banking'
+            : 'bank_transfer',
+        stripePaymentIntentId: `pi_live_${Date.now()}_stripe_${Math.random()
+          .toString(36)
+          .substring(7)}`,
+      });
+
       setStatus('success');
+      const orderId =
+        res?.order?._id || res?.order?.id || res?.data?._id || res?.data?.id || '';
+
       setTimeout(() => {
-        onSuccess({
-          paymentMethod:
-            activeTab === 'card'
-              ? 'card'
-              : activeTab === 'mobile'
-              ? 'mobile_banking'
-              : 'bank_transfer',
-          stripePaymentIntentId: `pi_live_${Date.now()}_stripe_${Math.random()
-            .toString(36)
-            .substring(7)}`,
-        });
-      }, 1100);
-    }, 1400);
+        onOpenChange(false);
+        if (orderId) {
+          router.push(`/orders?orderId=${orderId}`);
+        } else {
+          router.push('/orders');
+        }
+      }, 700);
+    } catch {
+      setStatus('idle');
+      onOpenChange(false);
+    }
   };
 
   const displaySubtotal = subtotal > 0 ? subtotal : Math.round(amount / 1.1);

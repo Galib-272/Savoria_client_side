@@ -136,13 +136,16 @@ export default function CheckoutPage() {
 
       if (payMethod === 'cash') {
         toast.success(`Order confirmed! Cash payment of ${formatCurrency(total)} instantly received.`);
+        router.push(`/orders?orderId=${orderId}`);
       } else {
-        toast.success(`Payment of ${formatCurrency(total)} confirmed via Stripe! Order placed successfully.`);
+        toast.success(`Payment of ${formatCurrency(total)} confirmed! Order placed successfully.`);
+        router.push(`/orders?orderId=${orderId}`);
       }
-
-      setTimeout(() => router.push(`/orders?orderId=${orderId}`), 1800);
+      return res;
     } catch (err: any) {
+      setStripeModalOpen(false);
       toast.error(err?.message || 'Failed to place order');
+      throw err;
     } finally {
       setSubmitting(false);
     }
@@ -310,8 +313,8 @@ export default function CheckoutPage() {
         subtotal={subtotal}
         tax={tax}
         deliveryFee={deliveryFee}
-        onSuccess={({ paymentMethod: confirmedMethod, stripePaymentIntentId }) => {
-          executeOrderCreation({
+        onSuccess={async ({ paymentMethod: confirmedMethod, stripePaymentIntentId }) => {
+          return await executeOrderCreation({
             payMethod: confirmedMethod,
             payStatus: 'paid',
             stripePaymentIntentId,
