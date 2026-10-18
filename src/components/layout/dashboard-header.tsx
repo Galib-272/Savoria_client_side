@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, Bell, Menu as MenuIcon, LogOut } from 'lucide-react';
+import { Search, Bell, Menu as MenuIcon, LogOut, CheckCheck, Trash2, CheckCircle2 } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { notifications as fallbackNotifications } from '@/lib/mock-data';
+import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { useCurrentUser } from '@/hooks/use-current-user';
@@ -28,19 +28,23 @@ interface DashboardHeaderProps {
 export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
   const router = useRouter();
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifList, setNotifList] = useState<Notification[]>(fallbackNotifications);
+  const [notifList, setNotifList] = useState<Notification[]>([]);
+  const [isRinging, setIsRinging] = useState(false);
   const currentUser = useCurrentUser();
 
   useEffect(() => {
-
     // Fetch live notifications
-    api.getNotifications().then((data) => {
-      if (data && data.length) {
-        setNotifList(data.map((n: any) => ({ ...n, id: n._id || n.id })));
-      }
-    }).catch(console.error);
+    const fetchNotifications = () => {
+      api.getNotifications().then((data) => {
+        if (Array.isArray(data)) {
+          setNotifList(data.map((n: any) => ({ ...n, id: n._id || n.id })));
+        }
+      }).catch(console.error);
+    };
 
-    // Listen for live socket notifications
+    fetchNotifications();
+
+    // Listen for live socket notifications & sync
     const socket = getSocket();
     if (socket) {
       socket.on('notification', (newNotif: any) => {
@@ -53,28 +57,58 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
           },
           ...prev,
         ]);
+        // Trigger subtle bell animation
+        setIsRinging(true);
+        setTimeout(() => setIsRinging(false), 1500);
       });
+
+      socket.on('notification:read_all', () => {
+        setNotifList((prev) => prev.map((n) => ({ ...n, read: true })));
+      });
+
+      socket.on('notification:cleared_all', () => {
+        setNotifList([]);
+      });
+
+      socket.on('notification:read_one', ({ id }: { id: string }) => {
+        setNotifList((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+      });
+
       return () => {
         socket.off('notification');
+        socket.off('notification:read_all');
+        socket.off('notification:cleared_all');
+        socket.off('notification:read_one');
       };
     }
   }, []);
 
   const handleMarkRead = async (id: string) => {
+    // Optimistic local update
+    setNotifList((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
     try {
       await api.markNotificationRead(id);
-      setNotifList((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
     } catch {
-      setNotifList((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+      // Keep optimistic
     }
   };
 
   const handleMarkAllRead = async () => {
+    // Optimistic local update: all read immediately
+    setNotifList((prev) => prev.map((n) => ({ ...n, read: true })));
     try {
       await api.markAllNotificationsRead();
-      setNotifList((prev) => prev.map((n) => ({ ...n, read: true })));
     } catch {
-      setNotifList((prev) => prev.map((n) => ({ ...n, read: true })));
+      // Keep optimistic
+    }
+  };
+
+  const handleClearAll = async () => {
+    setNotifList([]);
+    try {
+      await api.clearAllNotifications();
+    } catch {
+      // Keep optimistic
     }
   };
 
@@ -105,50 +139,119 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
       <div className="ml-auto flex items-center gap-2">
         <DropdownMenu open={notifOpen} onOpenChange={setNotifOpen}>
           <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" className="relative">
+            <Button
+              variant="ghost"
+              size="icon"
+              className={cn(
+                "relative transition-all duration-200 hover:bg-accent/80",
+                isRinging && "animate-bell-ring"
+              )}
+            >
               <Bell className="h-5 w-5" />
               {unreadCount > 0 && (
-                <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground">
-                  {unreadCount}
+                <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground shadow-sm animate-badge-pop">
+                  {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
             </Button>
           </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-80">
-            <DropdownMenuLabel className="flex items-center justify-between">
-              Notifications
-              {unreadCount > 0 && <Badge>{unreadCount} new</Badge>}
-            </DropdownMenuLabel>
-            <DropdownMenuSeparator />
-            {notifList.slice(0, 6).map((notif) => (
-              <DropdownMenuItem
-                key={notif.id}
-                onClick={() => {
-                  handleMarkRead(notif.id);
-                  setNotifOpen(false);
-                  if (notif.orderId) {
-                    router.push(`/dashboard/orders?orderId=${notif.orderId}`);
-                  } else {
-                    router.push('/dashboard/orders');
-                  }
-                }}
-                className="flex flex-col items-start gap-1 py-3 cursor-pointer hover:bg-accent/60 transition-colors"
-              >
-                <div className="flex w-full items-center justify-between">
-                  <span className="text-sm font-semibold text-foreground">{notif.title}</span>
-                  {!notif.read && <span className="h-2 w-2 rounded-full bg-primary" />}
+          <DropdownMenuContent
+            align="end"
+            className="w-80 sm:w-96 p-0 rounded-2xl overflow-hidden border border-border shadow-2xl bg-card animate-in fade-in-50 zoom-in-95 duration-150"
+          >
+            {/* Header with Title + Unread Badge + Mark All Read Button */}
+            <div className="flex items-center justify-between border-b border-border bg-accent/40 px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Bell className="h-4 w-4 text-primary" />
+                <span className="text-sm font-bold text-foreground">Notifications</span>
+                {unreadCount > 0 ? (
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary animate-badge-pop">
+                    {unreadCount} new
+                  </span>
+                ) : (
+                  <span className="text-[10px] text-muted-foreground font-medium">All caught up</span>
+                )}
+              </div>
+
+              {unreadCount > 0 && (
+                <button
+                  type="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    handleMarkAllRead();
+                  }}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:text-primary/80 transition-colors cursor-pointer px-2 py-1 rounded-md hover:bg-primary/10"
+                >
+                  <CheckCheck className="h-3.5 w-3.5" />
+                  <span>Mark all read</span>
+                </button>
+              )}
+            </div>
+
+            {/* Scrollable list with max height so it never overflows off-screen */}
+            <div className="max-h-[360px] overflow-y-auto divide-y divide-border/40">
+              {notifList.length === 0 ? (
+                <div className="py-12 text-center text-muted-foreground">
+                  <Bell className="mx-auto mb-2 h-8 w-8 text-muted-foreground/30 animate-pulse" />
+                  <p className="text-sm font-medium">No notifications yet</p>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">You're all caught up!</p>
                 </div>
-                <span className="text-xs text-muted-foreground">{notif.message}</span>
-                <span className="text-[11px] text-muted-foreground/70">{notif.time || 'Recent'}</span>
-              </DropdownMenuItem>
-            ))}
-            <DropdownMenuSeparator />
-            <DropdownMenuItem
-              onClick={handleMarkAllRead}
-              className="justify-center text-sm text-primary cursor-pointer"
-            >
-              Mark all as read
-            </DropdownMenuItem>
+              ) : (
+                notifList.map((notif) => (
+                  <div
+                    key={notif.id}
+                    onClick={() => {
+                      handleMarkRead(notif.id);
+                      setNotifOpen(false);
+                      if (notif.orderId) {
+                        router.push(`/dashboard/orders?orderId=${notif.orderId}`);
+                      } else {
+                        router.push('/dashboard/orders');
+                      }
+                    }}
+                    className={cn(
+                      'flex flex-col gap-1 p-3.5 transition-all duration-150 cursor-pointer text-left group',
+                      !notif.read ? 'bg-primary/5 hover:bg-primary/10' : 'hover:bg-accent/60 opacity-80'
+                    )}
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className={cn('text-xs font-bold truncate', !notif.read ? 'text-foreground' : 'text-muted-foreground')}>
+                        {notif.title}
+                      </span>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        <span className="text-[10px] text-muted-foreground/70">{notif.time || 'Just now'}</span>
+                        {!notif.read && (
+                          <span className="h-2 w-2 rounded-full bg-primary ring-2 ring-primary/20 shrink-0" />
+                        )}
+                      </div>
+                    </div>
+                    <p className="text-xs text-muted-foreground line-clamp-2 leading-relaxed">
+                      {notif.message}
+                    </p>
+                  </div>
+                ))
+              )}
+            </div>
+
+            {/* Footer with Mark all as read & Clear all */}
+            {notifList.length > 0 && (
+              <div className="border-t border-border bg-accent/30 p-2 flex items-center justify-between text-xs text-muted-foreground px-4">
+                <button
+                  type="button"
+                  onClick={handleMarkAllRead}
+                  className="font-medium text-primary hover:underline transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <CheckCheck className="h-3 w-3" /> Mark all as read
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearAll}
+                  className="font-medium text-muted-foreground hover:text-destructive transition-colors cursor-pointer flex items-center gap-1"
+                >
+                  <Trash2 className="h-3 w-3" /> Clear all
+                </button>
+              </div>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
 

@@ -21,7 +21,7 @@ import {
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { restaurantInfo as fallbackRestaurantInfo } from '@/lib/mock-data';
-import { getCart } from '@/lib/cart';
+import { getCart, clearCart } from '@/lib/cart';
 import { api } from '@/lib/api';
 import { getStoredUser, type CurrentUser } from '@/lib/auth';
 import { CustomerNotificationBell } from './customer-notifications';
@@ -61,19 +61,31 @@ export function PublicNavbar() {
     }).catch(console.error);
 
     const updateCount = () => {
+      const user = getStoredUser();
+      if (!user) {
+        setCartCount(0);
+        return;
+      }
       const items = getCart();
       setCartCount(items.reduce((acc, curr) => acc + curr.quantity, 0));
     };
     updateCount();
 
-    const refreshUser = () => setCurrentUser(getStoredUser());
+    const refreshUser = () => {
+      const user = getStoredUser();
+      setCurrentUser(user);
+      // Also reset cart count when auth state changes
+      if (!user) setCartCount(0);
+    };
     refreshUser();
 
     window.addEventListener('cart_updated', updateCount);
     window.addEventListener('storage', refreshUser);
+    window.addEventListener('auth_changed', refreshUser);
     return () => {
       window.removeEventListener('cart_updated', updateCount);
       window.removeEventListener('storage', refreshUser);
+      window.removeEventListener('auth_changed', refreshUser);
     };
   }, []);
 
@@ -93,7 +105,9 @@ export function PublicNavbar() {
 
   const handleLogout = () => {
     api.logout();
+    clearCart();
     setCurrentUser(null);
+    setCartCount(0);
     setDropdownOpen(false);
     setMobileProfileOpen(false);
     router.push('/');
@@ -161,13 +175,13 @@ export function PublicNavbar() {
             {/* Customer Notification Bell — only shows for logged-in customers */}
             <CustomerNotificationBell />
 
-            {/* Cart */}
+            {/* Cart — only show badge when logged in */}
             <Link
-              href="/cart"
+              href={currentUser ? '/cart' : '/login?redirect=/cart'}
               className="relative flex h-10 w-10 items-center justify-center rounded-full bg-accent text-foreground transition-colors hover:bg-secondary"
             >
               <ShoppingBag className="h-5 w-5" />
-              {cartCount > 0 && (
+              {currentUser && cartCount > 0 && (
                 <span className="absolute -right-1 -top-1 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-primary-foreground animate-in zoom-in">
                   {cartCount}
                 </span>

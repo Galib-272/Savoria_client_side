@@ -192,7 +192,7 @@ export const menuItems: MenuItem[] = [
     name: 'Fresh Lime Mojito',
     description: 'Refreshing lime and mint mocktail with soda water.',
     price: 120,
-    image: 'https://images.pexels.com/photos/312418/pexels-photo-312418.jpeg?auto=compress&cs=tinysrgb&w=600',
+    image: 'https://plus.unsplash.com/premium_photo-1721025990485-73e7e54d4256?w=900&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=NHwxMjA3fDA%3D',
     categoryId: 'cat-7',
     available: true,
     featured: false,

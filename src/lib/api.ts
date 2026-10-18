@@ -404,6 +404,12 @@ export const api = {
     });
   },
 
+  async clearAllNotifications() {
+    return apiRequest<any>('/notifications/clear-all', {
+      method: 'DELETE',
+    });
+  },
+
   // Reports & Analytics
   async getDashboardStats() {
     const res: any = await apiRequest('/reports/dashboard-stats');

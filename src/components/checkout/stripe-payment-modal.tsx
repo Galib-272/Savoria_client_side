@@ -163,6 +163,89 @@ export function StripePaymentModal({
 
   if (!open) return null;
 
+  // Auto-format card number: groups of 4 digits separated by spaces
+  const handleCardNumberChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const raw = e.target.value;
+    const digits = raw.replace(/\D/g, '').slice(0, 16);
+    const formatted = digits.match(/.{1,4}/g)?.join(' ') || '';
+    setCardNumber(formatted);
+  };
+
+  // Auto-format expiration date: handles auto-slash, MM/YY, and typing 1/27
+  const handleExpiryChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    let val = e.target.value;
+
+    // Handle backspace when trailing slash is present
+    if (val.length < expiry.length) {
+      if (expiry.endsWith('/') && !val.endsWith('/')) {
+        val = val.slice(0, -1);
+      }
+      setExpiry(val);
+      return;
+    }
+
+    // If user typed or pasted with a slash, e.g. "1/27", "1/", "12/27"
+    if (val.includes('/')) {
+      const parts = val.split('/');
+      let m = parts[0].replace(/\D/g, '').slice(0, 2);
+      const y = (parts[1] || '').replace(/\D/g, '').slice(0, 2);
+
+      if (m.length === 1 && (parts.length > 1 || val.endsWith('/'))) {
+        m = `0${m}`;
+      }
+      const mNum = parseInt(m, 10);
+      if (mNum > 12) m = '12';
+      else if (mNum === 0 && m.length === 2) m = '01';
+
+      if (y.length > 0) {
+        setExpiry(`${m}/${y}`);
+      } else {
+        setExpiry(`${m}/`);
+      }
+      return;
+    }
+
+    // Extract digits only (when typed without slash)
+    const digits = val.replace(/\D/g, '').slice(0, 4);
+    if (!digits) {
+      setExpiry('');
+      return;
+    }
+
+    // If user typed 1 digit: if 2-9, auto-format to 0X/
+    if (digits.length === 1) {
+      if (Number(digits) > 1) {
+        setExpiry(`0${digits}/`);
+        return;
+      }
+      setExpiry(digits);
+      return;
+    }
+
+    // 2 or more digits: e.g. "01" -> "01/", "12" -> "12/", "0127" -> "01/27"
+    let month = digits.slice(0, 2);
+    const year = digits.slice(2, 4);
+
+    const monthNum = parseInt(month, 10);
+    if (monthNum > 12) {
+      month = '12';
+    } else if (monthNum === 0) {
+      month = '01';
+    }
+
+    if (year.length > 0) {
+      setExpiry(`${month}/${year}`);
+    } else {
+      setExpiry(`${month}/`);
+    }
+  };
+
+  // Auto-format CVC: digits only, max 4
+  const handleCvcChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const digits = e.target.value.replace(/\D/g, '').slice(0, 4);
+    setCvc(digits);
+  };
+
   const handlePay = async (e: React.FormEvent) => {
     e.preventDefault();
     if (status === 'processing' || status === 'success') return;
@@ -396,10 +479,13 @@ export function StripePaymentModal({
                       <div className="relative flex items-center px-3.5 h-11">
                         <input
                           type="text"
+                          inputMode="numeric"
+                          autoComplete="cc-number"
+                          maxLength={19}
                           value={cardNumber}
-                          onChange={(e) => setCardNumber(e.target.value)}
+                          onChange={handleCardNumberChange}
                           placeholder="1234 1234 1234 1234"
-                          className="w-full text-sm text-[#1a1f36] placeholder-[#a1aab6] bg-transparent focus:outline-none tracking-wide"
+                          className="w-full text-sm text-[#1a1f36] placeholder-[#a1aab6] bg-transparent focus:outline-none tracking-wider font-mono text-[13px]"
                         />
                         <div className="flex items-center gap-1.5 shrink-0 pl-2">
                           <VisaIcon />
@@ -413,19 +499,25 @@ export function StripePaymentModal({
                         <div className="px-3.5 h-11 flex items-center">
                           <input
                             type="text"
+                            inputMode="numeric"
+                            autoComplete="cc-exp"
+                            maxLength={5}
                             value={expiry}
-                            onChange={(e) => setExpiry(e.target.value)}
-                            placeholder="MM / YY"
-                            className="w-full text-sm text-[#1a1f36] placeholder-[#a1aab6] bg-transparent focus:outline-none"
+                            onChange={handleExpiryChange}
+                            placeholder="MM/YY"
+                            className="w-full text-sm text-[#1a1f36] placeholder-[#a1aab6] bg-transparent focus:outline-none font-mono text-[13px]"
                           />
                         </div>
                         <div className="px-3.5 h-11 flex items-center justify-between">
                           <input
                             type="text"
+                            inputMode="numeric"
+                            autoComplete="cc-csc"
+                            maxLength={4}
                             value={cvc}
-                            onChange={(e) => setCvc(e.target.value)}
+                            onChange={handleCvcChange}
                             placeholder="CVC"
-                            className="w-full text-sm text-[#1a1f36] placeholder-[#a1aab6] bg-transparent focus:outline-none"
+                            className="w-full text-sm text-[#1a1f36] placeholder-[#a1aab6] bg-transparent focus:outline-none font-mono text-[13px]"
                           />
                           <CreditCard className="h-4 w-4 text-[#a1aab6] shrink-0" />
                         </div>

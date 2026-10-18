@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Search, Eye, X, Utensils, CheckCircle2, Loader2, Bike } from 'lucide-react';
+import { Search, Eye, X, Utensils, CheckCircle2, Loader2, Bike, ShoppingBag } from 'lucide-react';
 import type { Order } from '@/lib/types';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
@@ -108,6 +108,10 @@ export default function OrdersPage() {
   // Waiter action: Take Order (Claim Food)
   const handleTakeOrder = async (order: Order, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (order.orderType === 'takeaway' || order.orderType === 'delivery') {
+      toast.error('Waiters can only take Dine-In orders.');
+      return;
+    }
     setActionLoadingId(order.id);
     try {
       await api.waiterClaimFood(order.id, currentUser?.name || 'Waiter');
@@ -122,6 +126,10 @@ export default function OrdersPage() {
   // Waiter action: Mark Served
   const handleMarkServed = async (order: Order, e?: React.MouseEvent) => {
     if (e) e.stopPropagation();
+    if (order.orderType === 'takeaway' || order.orderType === 'delivery') {
+      toast.error('Waiters can only serve Dine-In orders.');
+      return;
+    }
     setActionLoadingId(order.id);
     try {
       await api.updateOrderStatus(order.id, 'served');
@@ -303,8 +311,8 @@ export default function OrdersPage() {
 
                       {/* Workflow Actions Column */}
                       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                        {/* Waiter: Ready order (Dine-In or Takeaway) not yet claimed -> Take Order button */}
-                        {isWaiter && (order.orderType === 'dine-in' || order.orderType === 'takeaway' || !order.orderType) && order.status === 'ready' && !order.waiterName && (
+                        {/* Waiter: Ready Dine-In order not yet claimed -> Take Order button */}
+                        {isWaiter && (order.orderType === 'dine-in' || (!order.orderType && !!order.tableNumber)) && order.status === 'ready' && !order.waiterName && (
                           <Button
                             size="sm"
                             className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold h-8 px-3 gap-1.5 shadow-sm"
@@ -320,8 +328,8 @@ export default function OrdersPage() {
                           </Button>
                         )}
 
-                        {/* Waiter: Order is ready AND claimed by waiter -> Mark Served / Hand Over button */}
-                        {isWaiter && (order.orderType === 'dine-in' || order.orderType === 'takeaway' || !order.orderType) && order.status === 'ready' && !!order.waiterName && (
+                        {/* Waiter: Ready Dine-In order claimed by waiter -> Mark Served */}
+                        {isWaiter && (order.orderType === 'dine-in' || (!order.orderType && !!order.tableNumber)) && order.status === 'ready' && !!order.waiterName && (
                           <Button
                             size="sm"
                             variant="secondary"
@@ -334,14 +342,28 @@ export default function OrdersPage() {
                             ) : (
                               <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" />
                             )}
-                            {order.orderType === 'takeaway' ? 'Hand Over' : 'Mark Served'}
+                            Mark Served
                           </Button>
                         )}
 
-                        {/* Waiter: Order already served */}
-                        {isWaiter && (order.orderType === 'dine-in' || !order.orderType) && order.status === 'served' && (
+                        {/* Waiter: Dine-In order already served */}
+                        {isWaiter && (order.orderType === 'dine-in' || (!order.orderType && !!order.tableNumber)) && order.status === 'served' && (
                           <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-full">
                             <CheckCircle2 className="h-3.5 w-3.5" /> Served
+                          </span>
+                        )}
+
+                        {/* Waiter panel: Takeaway orders cannot be taken by waiters */}
+                        {isWaiter && order.orderType === 'takeaway' && (
+                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/80 font-medium bg-muted/50 px-2.5 py-1 rounded-full border border-border/50">
+                            <ShoppingBag className="h-3.5 w-3.5 text-orange-500" /> Counter Takeaway
+                          </span>
+                        )}
+
+                        {/* Waiter panel: Delivery orders cannot be taken by waiters */}
+                        {isWaiter && order.orderType === 'delivery' && (
+                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/80 font-medium bg-muted/50 px-2.5 py-1 rounded-full border border-border/50">
+                            <Bike className="h-3.5 w-3.5 text-indigo-500" /> Rider Delivery
                           </span>
                         )}
 
@@ -434,9 +456,10 @@ export default function OrdersPage() {
                   Order Workflow Actions:
                 </span>
                 <div className="flex items-center gap-2">
-                  {/* Take Order action in dialog: when ready and not yet claimed */}
-                  {selectedOrder.status === 'ready' &&
-                    (selectedOrder.orderType === 'dine-in' || selectedOrder.orderType === 'takeaway' || !selectedOrder.orderType) &&
+                  {/* Take Order action in dialog: ONLY for Dine-In when ready and not yet claimed */}
+                  {isWaiter &&
+                    selectedOrder.status === 'ready' &&
+                    (selectedOrder.orderType === 'dine-in' || (!selectedOrder.orderType && !!selectedOrder.tableNumber)) &&
                     !selectedOrder.waiterName && (
                       <Button
                         size="sm"
@@ -448,9 +471,10 @@ export default function OrdersPage() {
                       </Button>
                     )}
 
-                  {/* Mark Served / Hand Over in dialog: when ready and claimed by waiter */}
-                  {selectedOrder.status === 'ready' &&
-                    (selectedOrder.orderType === 'dine-in' || selectedOrder.orderType === 'takeaway' || !selectedOrder.orderType) &&
+                  {/* Mark Served in dialog: ONLY for Dine-In when ready and claimed by waiter */}
+                  {isWaiter &&
+                    selectedOrder.status === 'ready' &&
+                    (selectedOrder.orderType === 'dine-in' || (!selectedOrder.orderType && !!selectedOrder.tableNumber)) &&
                     !!selectedOrder.waiterName && (
                       <Button
                         size="sm"
@@ -458,10 +482,23 @@ export default function OrdersPage() {
                         disabled={actionLoadingId === selectedOrder.id}
                         onClick={() => handleMarkServed(selectedOrder)}
                       >
-                        <CheckCircle2 className="h-3.5 w-3.5" />
-                        {selectedOrder.orderType === 'takeaway' ? 'Hand Over to Customer' : 'Mark as Served'}
+                        <CheckCircle2 className="h-3.5 w-3.5" /> Mark as Served
                       </Button>
                     )}
+
+                  {/* Note for Waiter on Takeaway order in dialog */}
+                  {isWaiter && selectedOrder.orderType === 'takeaway' && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 px-3 py-1.5 rounded-full">
+                      <ShoppingBag className="h-3.5 w-3.5" /> Takeaway (Handed over at front counter)
+                    </span>
+                  )}
+
+                  {/* Note for Waiter on Delivery order in dialog */}
+                  {isWaiter && selectedOrder.orderType === 'delivery' && (
+                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-full">
+                      <Bike className="h-3.5 w-3.5" /> Delivery (Handled by delivery riders)
+                    </span>
+                  )}
 
                   {/* Order already served */}
                   {selectedOrder.status === 'served' && (

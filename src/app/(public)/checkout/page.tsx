@@ -9,7 +9,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
-import { ArrowLeft, CheckCircle2, CreditCard } from 'lucide-react';
+import { Badge } from '@/components/ui/badge';
+import { ArrowLeft, CheckCircle2, CreditCard, Armchair, MapPin } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
 import { getCart, clearCart, type CartItem } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
@@ -17,6 +18,7 @@ import { api } from '@/lib/api';
 import { toast } from 'sonner';
 
 import { StripePaymentModal } from '@/components/checkout/stripe-payment-modal';
+import { TableSeatSelector } from '@/components/checkout/table-seat-selector';
 
 export default function CheckoutPage() {
   const router = useRouter();
@@ -26,7 +28,10 @@ export default function CheckoutPage() {
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
-  const [tableNumber, setTableNumber] = useState('1');
+  const [tableNumber, setTableNumber] = useState('');
+  const [selectedTableId, setSelectedTableId] = useState('');
+  const [selectedTableName, setSelectedTableName] = useState('');
+  const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
@@ -56,6 +61,13 @@ export default function CheckoutPage() {
   const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
   const total = subtotal + tax + deliveryFee;
 
+  const handleTableSeatSelect = (tableId: string, tableNum: number, tableName: string, seats: string[]) => {
+    setSelectedTableId(tableId);
+    setTableNumber(String(tableNum));
+    setSelectedTableName(tableName);
+    setSelectedSeats(seats);
+  };
+
   const handleProceedToPayment = (e: React.FormEvent) => {
     e.preventDefault();
     if (cart.length === 0) {
@@ -70,8 +82,8 @@ export default function CheckoutPage() {
       toast.error('Please enter your phone number');
       return;
     }
-    if (orderType === 'dine-in' && !tableNumber) {
-      toast.error('Please specify your table number');
+    if (orderType === 'dine-in' && (!tableNumber || selectedSeats.length === 0)) {
+      toast.error('Please select a table and at least one seat');
       return;
     }
     if (orderType === 'delivery' && !deliveryAddress.trim()) {
@@ -103,7 +115,7 @@ export default function CheckoutPage() {
   }) => {
     setSubmitting(true);
     try {
-      const orderData = {
+      const orderData: Record<string, any> = {
         orderType,
         customerName: name,
         customerPhone: phone,
@@ -128,11 +140,29 @@ export default function CheckoutPage() {
         notes,
       };
 
+      // Include dine-in seat selection metadata
+      if (orderType === 'dine-in' && selectedSeats.length > 0) {
+        orderData.selectedTableId = selectedTableId;
+        orderData.selectedTableName = selectedTableName;
+        orderData.selectedSeats = selectedSeats;
+      }
+
       const res = await api.createOrder(orderData);
       const orderId = res?.order?._id || res?.order?.id || res?.data?._id || res?.data?.id || 'ORD-NEW';
       setCreatedOrderId(orderId);
       clearCart();
       setStripeModalOpen(false);
+
+      // Mark selected seats as occupied on the table
+      if (orderType === 'dine-in' && selectedTableId && selectedSeats.length > 0) {
+        try {
+          for (const seat of selectedSeats) {
+            await api.updateSeatStatus(selectedTableId, seat, 'occupied', name);
+          }
+        } catch {
+          // Non-blocking — seats might have been updated by kitchen/waiter
+        }
+      }
 
       if (payMethod === 'cash') {
         toast.success(`Order confirmed! Cash payment of ${formatCurrency(total)} instantly received.`);
@@ -164,7 +194,7 @@ export default function CheckoutPage() {
   }
 
   return (
-    <div className="mx-auto max-w-5xl px-4 py-8 sm:px-6 lg:px-8">
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <Link href="/cart" className="mb-4 inline-flex items-center text-sm text-muted-foreground hover:text-primary">
         <ArrowLeft className="mr-1 h-4 w-4" /> Back to Cart
       </Link>
@@ -178,13 +208,46 @@ export default function CheckoutPage() {
             <CardContent>
               <div className="grid grid-cols-3 gap-3">
                 {(['dine-in', 'takeaway', 'delivery'] as const).map((type) => (
-                  <button key={type} type="button" onClick={() => setOrderType(type)} className={cn('rounded-lg border-2 px-4 py-3 text-sm font-medium capitalize transition-colors', orderType === type ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent')}>
+                  <button key={type} type="button" onClick={() => { setOrderType(type); if (type !== 'dine-in') { setSelectedTableId(''); setSelectedTableName(''); setSelectedSeats([]); setTableNumber(''); } }} className={cn('rounded-lg border-2 px-4 py-3 text-sm font-medium capitalize transition-colors', orderType === type ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent')}>
                     {type.replace('-', ' ')}
                   </button>
                 ))}
               </div>
             </CardContent>
           </Card>
+
+          {/* Dine-In: Interactive Table & Seat Selection */}
+          {orderType === 'dine-in' && (
+            <div className="space-y-4">
+              <TableSeatSelector
+                onSelect={handleTableSeatSelect}
+                selectedTableId={selectedTableId}
+                selectedSeats={selectedSeats}
+                customerName={name}
+              />
+
+              {/* Selected table confirmation strip */}
+              {selectedTableName && selectedSeats.length > 0 && (
+                <div className="flex items-center gap-3 rounded-xl border-2 border-primary/30 bg-primary/5 px-4 py-3 animate-in slide-in-from-top-2">
+                  <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary/10">
+                    <Armchair className="h-5 w-5 text-primary" />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-semibold">
+                      {selectedTableName} — {selectedSeats.length} {selectedSeats.length === 1 ? 'seat' : 'seats'} selected
+                    </p>
+                    <p className="text-xs text-muted-foreground flex items-center gap-1.5 mt-0.5">
+                      <MapPin className="h-3 w-3" />
+                      Seats: {selectedSeats.join(', ')}
+                    </p>
+                  </div>
+                  <Badge variant="outline" className="shrink-0 border-primary/30 text-primary text-xs">
+                    <CheckCircle2 className="h-3 w-3 mr-1" /> Confirmed
+                  </Badge>
+                </div>
+              )}
+            </div>
+          )}
 
           {/* Customer Info */}
           <Card>
@@ -219,17 +282,6 @@ export default function CheckoutPage() {
                   onChange={(e) => setEmail(e.target.value)}
                 />
               </div>
-              {orderType === 'dine-in' && (
-                <div className="space-y-2">
-                  <Label>Table Number (T1 - T25)</Label>
-                  <Input
-                    placeholder="e.g. 5"
-                    value={tableNumber}
-                    onChange={(e) => setTableNumber(e.target.value)}
-                    required
-                  />
-                </div>
-              )}
               {orderType === 'delivery' && (
                 <div className="space-y-2">
                   <Label>Delivery Address</Label>
@@ -292,9 +344,27 @@ export default function CheckoutPage() {
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
               {deliveryFee > 0 && <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>}
               <Separator />
+
+              {/* Dine-in seat info in summary */}
+              {orderType === 'dine-in' && selectedTableName && selectedSeats.length > 0 && (
+                <>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground flex items-center gap-1">
+                      <Armchair className="h-3.5 w-3.5" /> Table
+                    </span>
+                    <span className="font-medium">{selectedTableName}</span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-muted-foreground">Seats</span>
+                    <span className="font-medium">{selectedSeats.join(', ')}</span>
+                  </div>
+                  <Separator />
+                </>
+              )}
+
               <div className="flex justify-between font-bold text-lg"><span>Total</span><span className="text-primary">{formatCurrency(total)}</span></div>
-              <Button type="submit" className="w-full text-base font-bold h-11" disabled={submitting || cart.length === 0}>
-                {submitting ? 'Processing Payment...' : 'Proceed to Payment'}
+              <Button type="submit" className="w-full text-base font-bold h-11" disabled={submitting || cart.length === 0 || (orderType === 'dine-in' && selectedSeats.length === 0)}>
+                {submitting ? 'Processing Payment...' : orderType === 'dine-in' && selectedSeats.length === 0 ? 'Select Table & Seats First' : 'Proceed to Payment'}
               </Button>
             </CardContent>
           </Card>

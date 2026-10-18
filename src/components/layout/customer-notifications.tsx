@@ -14,6 +14,7 @@ import {
   Package,
   X,
   Clock,
+  CheckCheck,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -47,14 +48,25 @@ const STATUS_COLORS: Record<string, string> = {
   default: 'text-primary bg-primary/10',
 };
 
+const NOTIFS_STORAGE_KEY = 'rms_customer_notifications';
+
 export function CustomerNotificationBell() {
   const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
   const [open, setOpen] = useState(false);
   const [isCustomer, setIsCustomer] = useState(false);
+  const [isRinging, setIsRinging] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
   const joinedRef = useRef(false);
 
   useEffect(() => {
+    // Hydrate from localStorage
+    try {
+      const saved = localStorage.getItem(NOTIFS_STORAGE_KEY);
+      if (saved) {
+        setNotifications(JSON.parse(saved));
+      }
+    } catch {}
+
     const user = getStoredUser();
     if (!user) {
       setIsCustomer(false);
@@ -188,11 +200,20 @@ export function CustomerNotificationBell() {
   const unreadCount = notifications.filter((n) => !n.read).length;
 
   const markAllRead = () => {
-    setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+    setNotifications((prev) => {
+      const updated = prev.map((n) => ({ ...n, read: true }));
+      try {
+        localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(updated));
+      } catch {}
+      return updated;
+    });
   };
 
   const clearAll = () => {
     setNotifications([]);
+    try {
+      localStorage.removeItem(NOTIFS_STORAGE_KEY);
+    } catch {}
     setOpen(false);
   };
 
@@ -203,14 +224,16 @@ export function CustomerNotificationBell() {
       <button
         onClick={() => {
           setOpen((o) => !o);
-          if (!open) markAllRead();
         }}
-        className="relative flex h-10 w-10 items-center justify-center rounded-full bg-accent text-foreground transition-colors hover:bg-secondary"
+        className={cn(
+          "relative flex h-10 w-10 items-center justify-center rounded-full bg-accent text-foreground transition-all duration-200 hover:bg-secondary cursor-pointer",
+          isRinging && "animate-bell-ring"
+        )}
         aria-label="Notifications"
       >
         <Bell className="h-5 w-5" />
         {unreadCount > 0 && (
-          <span className="absolute -right-0.5 -top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-destructive text-[10px] font-bold text-white animate-in zoom-in">
+          <span className="absolute -right-0.5 -top-0.5 flex h-5 w-5 items-center justify-center rounded-full bg-primary text-[10px] font-bold text-white animate-badge-pop shadow-sm">
             {unreadCount > 9 ? '9+' : unreadCount}
           </span>
         )}
@@ -223,20 +246,35 @@ export function CustomerNotificationBell() {
             <div className="flex items-center gap-2">
               <Bell className="h-4 w-4 text-primary" />
               <span className="text-sm font-bold text-foreground">Order Notifications</span>
-              {notifications.length > 0 && (
-                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary">
-                  {notifications.length}
+              {unreadCount > 0 ? (
+                <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary animate-badge-pop">
+                  {unreadCount} new
                 </span>
+              ) : (
+                <span className="text-[10px] text-muted-foreground font-medium">All caught up</span>
               )}
             </div>
-            {notifications.length > 0 && (
-              <button
-                onClick={clearAll}
-                className="text-[11px] font-medium text-muted-foreground hover:text-destructive transition-colors"
-              >
-                Clear all
-              </button>
-            )}
+            <div className="flex items-center gap-2">
+              {unreadCount > 0 && (
+                <button
+                  type="button"
+                  onClick={markAllRead}
+                  className="flex items-center gap-1 text-[11px] font-semibold text-primary hover:text-primary/80 transition-colors cursor-pointer px-2 py-1 rounded hover:bg-primary/10"
+                >
+                  <CheckCheck className="h-3.5 w-3.5" />
+                  <span>Mark all read</span>
+                </button>
+              )}
+              {notifications.length > 0 && (
+                <button
+                  type="button"
+                  onClick={clearAll}
+                  className="text-[11px] font-medium text-muted-foreground hover:text-destructive transition-colors cursor-pointer"
+                >
+                  Clear all
+                </button>
+              )}
+            </div>
           </div>
 
           {/* Notification List */}
@@ -259,6 +297,13 @@ export function CustomerNotificationBell() {
                   <button
                     key={notif.id}
                     onClick={() => {
+                      setNotifications((prev) => {
+                        const updated = prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n));
+                        try {
+                          localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(updated));
+                        } catch {}
+                        return updated;
+                      });
                       if (notif.orderId) {
                         window.location.href = `/orders?orderId=${notif.orderId}`;
                       }

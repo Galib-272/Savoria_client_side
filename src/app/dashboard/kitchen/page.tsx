@@ -4,7 +4,7 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Clock, Flame, CheckCircle, ChefHat, Utensils, Bike, ShoppingBag, Loader2 } from 'lucide-react';
+import { Clock, Flame, CheckCircle, ChefHat, Utensils, Bike, ShoppingBag, Loader2, Lock } from 'lucide-react';
 import type { Order, OrderStatus } from '@/lib/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -102,6 +102,19 @@ export default function KitchenPage() {
   };
 
   const handleMarkReady = async (orderId: string, targetPanel: 'dine-in' | 'takeaway' | 'delivery') => {
+    const targetOrder = kitchenOrders.find((o) => o.id === orderId);
+    if (targetOrder) {
+      const allowedType = targetOrder.orderType === 'takeaway'
+        ? 'takeaway'
+        : targetOrder.orderType === 'delivery'
+        ? 'delivery'
+        : 'dine-in';
+      if (allowedType !== targetPanel) {
+        toast.error(`Action blocked: Customer selected ${allowedType.replace('-', ' ')}`);
+        return;
+      }
+    }
+
     setLoadingOrderId(orderId);
     try {
       await api.markOrderReady(orderId, targetPanel);
@@ -282,42 +295,85 @@ export default function KitchenPage() {
                           )}
 
                           {/* Action 2: Preparing -> 3 Distinct Ready Options */}
-                          {col.key === 'preparing' && (
-                            <div className="space-y-2 pt-1 border-t border-border/60">
-                              <p className="text-[11px] font-semibold text-muted-foreground uppercase tracking-wider text-center">
-                                Mark Food Ready As:
-                              </p>
-                              <div className="grid grid-cols-3 gap-1.5">
-                                <Button
-                                  size="sm"
-                                  className="h-9 px-1 text-xs font-semibold bg-teal-600 hover:bg-teal-700 text-white flex flex-col items-center justify-center gap-0.5 leading-tight"
-                                  disabled={isLoading}
-                                  onClick={() => handleMarkReady(order.id, 'dine-in')}
-                                >
-                                  <Utensils className="h-3.5 w-3.5" />
-                                  <span>Dine In</span>
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  className="h-9 px-1 text-xs font-semibold bg-amber-600 hover:bg-amber-700 text-white flex flex-col items-center justify-center gap-0.5 leading-tight"
-                                  disabled={isLoading}
-                                  onClick={() => handleMarkReady(order.id, 'takeaway')}
-                                >
-                                  <ShoppingBag className="h-3.5 w-3.5" />
-                                  <span>Takeaway</span>
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  className="h-9 px-1 text-xs font-semibold bg-indigo-600 hover:bg-indigo-700 text-white flex flex-col items-center justify-center gap-0.5 leading-tight"
-                                  disabled={isLoading}
-                                  onClick={() => handleMarkReady(order.id, 'delivery')}
-                                >
-                                  <Bike className="h-3.5 w-3.5" />
-                                  <span>Delivery</span>
-                                </Button>
+                          {col.key === 'preparing' && (() => {
+                            const customerChoice = order.orderType === 'takeaway'
+                              ? 'takeaway'
+                              : order.orderType === 'delivery'
+                              ? 'delivery'
+                              : 'dine-in';
+
+                            return (
+                              <div className="space-y-2 pt-1 border-t border-border/60">
+                                <div className="flex items-center justify-between text-[11px] font-semibold text-muted-foreground uppercase tracking-wider">
+                                  <span>Mark Ready As:</span>
+                                  <span className="text-[10px] font-bold text-primary capitalize px-1.5 py-0.5 rounded bg-primary/10">
+                                    Customer: {customerChoice.replace('-', ' ')}
+                                  </span>
+                                </div>
+                                <div className="grid grid-cols-3 gap-1.5">
+                                  {/* Dine In Button */}
+                                  <Button
+                                    size="sm"
+                                    disabled={isLoading || customerChoice !== 'dine-in'}
+                                    title={customerChoice === 'dine-in' ? 'Mark ready for Dine-In' : `Blocked: Order was placed as ${customerChoice}`}
+                                    className={cn(
+                                      "h-9 px-1 text-xs font-semibold flex flex-col items-center justify-center gap-0.5 leading-tight transition-all",
+                                      customerChoice === 'dine-in'
+                                        ? "bg-teal-600 hover:bg-teal-700 text-white ring-2 ring-teal-500/30 shadow-sm cursor-pointer"
+                                        : "bg-muted/70 text-muted-foreground/40 border border-border/40 opacity-35 cursor-not-allowed pointer-events-none hover:bg-muted/70"
+                                    )}
+                                    onClick={() => handleMarkReady(order.id, 'dine-in')}
+                                  >
+                                    <div className="flex items-center gap-1">
+                                      <Utensils className="h-3.5 w-3.5" />
+                                      {customerChoice !== 'dine-in' && <Lock className="h-2.5 w-2.5 opacity-70" />}
+                                    </div>
+                                    <span>Dine In</span>
+                                  </Button>
+
+                                  {/* Takeaway Button */}
+                                  <Button
+                                    size="sm"
+                                    disabled={isLoading || customerChoice !== 'takeaway'}
+                                    title={customerChoice === 'takeaway' ? 'Mark ready for Takeaway' : `Blocked: Order was placed as ${customerChoice}`}
+                                    className={cn(
+                                      "h-9 px-1 text-xs font-semibold flex flex-col items-center justify-center gap-0.5 leading-tight transition-all",
+                                      customerChoice === 'takeaway'
+                                        ? "bg-amber-600 hover:bg-amber-700 text-white ring-2 ring-amber-500/30 shadow-sm cursor-pointer"
+                                        : "bg-muted/70 text-muted-foreground/40 border border-border/40 opacity-35 cursor-not-allowed pointer-events-none hover:bg-muted/70"
+                                    )}
+                                    onClick={() => handleMarkReady(order.id, 'takeaway')}
+                                  >
+                                    <div className="flex items-center gap-1">
+                                      <ShoppingBag className="h-3.5 w-3.5" />
+                                      {customerChoice !== 'takeaway' && <Lock className="h-2.5 w-2.5 opacity-70" />}
+                                    </div>
+                                    <span>Takeaway</span>
+                                  </Button>
+
+                                  {/* Delivery Button */}
+                                  <Button
+                                    size="sm"
+                                    disabled={isLoading || customerChoice !== 'delivery'}
+                                    title={customerChoice === 'delivery' ? 'Mark ready for Delivery' : `Blocked: Order was placed as ${customerChoice}`}
+                                    className={cn(
+                                      "h-9 px-1 text-xs font-semibold flex flex-col items-center justify-center gap-0.5 leading-tight transition-all",
+                                      customerChoice === 'delivery'
+                                        ? "bg-indigo-600 hover:bg-indigo-700 text-white ring-2 ring-indigo-500/30 shadow-sm cursor-pointer"
+                                        : "bg-muted/70 text-muted-foreground/40 border border-border/40 opacity-35 cursor-not-allowed pointer-events-none hover:bg-muted/70"
+                                    )}
+                                    onClick={() => handleMarkReady(order.id, 'delivery')}
+                                  >
+                                    <div className="flex items-center gap-1">
+                                      <Bike className="h-3.5 w-3.5" />
+                                      {customerChoice !== 'delivery' && <Lock className="h-2.5 w-2.5 opacity-70" />}
+                                    </div>
+                                    <span>Delivery</span>
+                                  </Button>
+                                </div>
                               </div>
-                            </div>
-                          )}
+                            );
+                          })()}
 
                           {/* Action 3: Ready status badge */}
                           {col.key === 'ready' && (
