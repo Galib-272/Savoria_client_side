@@ -56,18 +56,24 @@ export function CustomerNotificationBell() {
 
   useEffect(() => {
     const user = getStoredUser();
-    if (!user || user.role !== 'customer') {
+    if (!user) {
       setIsCustomer(false);
       return;
     }
     setIsCustomer(true);
 
     const socket = getSocket();
-    if (!socket || joinedRef.current) return;
-    joinedRef.current = true;
+    if (!socket) return;
 
-    // Join the customer role room so backend can push notifications
-    socket.emit('join_role_room', 'customer');
+    const joinRooms = () => {
+      socket.emit('join_role_room', 'customer');
+      if (user?.role) socket.emit('join_role_room', user.role);
+    };
+
+    if (socket.connected) {
+      joinRooms();
+    }
+    socket.on('connect', joinRooms);
 
     // Listen for real-time notifications from kitchen state changes
     const handleNotification = (data: any) => {
@@ -83,10 +89,8 @@ export function CustomerNotificationBell() {
 
       setNotifications((prev) => [notif, ...prev.slice(0, 19)]);
 
-      // Determine an icon name for the toast
       const statusKey = extractStatus(data.title || data.message);
 
-      // Show a rich toast notification
       toast(data.title || 'Order Update', {
         description: data.message,
         duration: 6000,
@@ -112,13 +116,61 @@ export function CustomerNotificationBell() {
       });
     };
 
+    // Listen for general order updates broadcasted from kitchen
+    const handleOrderUpdated = (order: any) => {
+      if (!order) return;
+      const status = order.status;
+      const orderNum =
+        order.orderNumber || (order._id || order.id || '').slice(-6).toUpperCase();
+
+      let title = 'Order Update';
+      let message = `Order #${orderNum} status is now ${status}`;
+
+      if (status === 'preparing') {
+        title = '🍳 Kitchen Started Preparing';
+        message = `Chef started preparing your Order #${orderNum}!`;
+      } else if (status === 'ready') {
+        title =
+          order.orderType === 'takeaway'
+            ? '🥡 Food Ready for Pickup!'
+            : '🍽️ Food Ready!';
+        message =
+          order.orderType === 'takeaway'
+            ? `Your takeaway Order #${orderNum} is ready! Please collect your food at the counter.`
+            : `Order #${orderNum} is hot & ready!`;
+      } else if (status === 'served') {
+        title = '🍽️ Food Served to Table';
+        message = `Order #${orderNum} has been served. Enjoy your meal!`;
+      } else if (status === 'completed') {
+        title = '✅ Order Handover Completed';
+        message = `Order #${orderNum} was picked up. Thank you!`;
+      } else if (status === 'out_for_delivery') {
+        title = '🛵 Order Out for Delivery';
+        message = `Rider has picked up Order #${orderNum} and is on the way!`;
+      } else if (status === 'delivered') {
+        title = '🏠 Order Delivered';
+        message = `Order #${orderNum} has been delivered. Enjoy!`;
+      }
+
+      handleNotification({
+        id: `update-${order._id || order.id}-${status}-${Date.now()}`,
+        title,
+        message,
+        type: 'order',
+        orderId: order._id || order.id,
+        time: 'Just now',
+      });
+    };
+
     socket.on('notification', handleNotification);
     socket.on('order:customer_update', handleCustomerUpdate);
+    socket.on('order:updated', handleOrderUpdated);
 
     return () => {
+      socket.off('connect', joinRooms);
       socket.off('notification', handleNotification);
       socket.off('order:customer_update', handleCustomerUpdate);
-      joinedRef.current = false;
+      socket.off('order:updated', handleOrderUpdated);
     };
   }, []);
 

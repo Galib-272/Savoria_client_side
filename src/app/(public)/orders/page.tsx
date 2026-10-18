@@ -1,8 +1,9 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
+import { toast } from 'sonner';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Separator } from '@/components/ui/separator';
@@ -138,6 +139,30 @@ export default function OrdersPage() {
   const [selectedOrder, setSelectedOrder] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [updatingPickup, setUpdatingPickup] = useState(false);
+  const ordersRef = useRef<any[]>([]);
+  ordersRef.current = orders;
+
+  const handleConfirmPickup = async (order: any) => {
+    const orderId = order._id || order.id;
+    setUpdatingPickup(true);
+    try {
+      await api.updateOrderStatus(orderId, 'completed', 'Takeaway food picked up by customer');
+      toast.success('Food picked up successfully! Enjoy your meal 🍽️');
+      setSelectedOrder((prev: any) => (prev ? { ...prev, status: 'completed' } : null));
+      setOrders((prev) =>
+        prev.map((o) => ((o._id || o.id) === orderId ? { ...o, status: 'completed' } : o))
+      );
+      const stored = getStoredUser();
+      if (stored) {
+        fetchOrders(stored, orderId);
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to confirm pickup');
+    } finally {
+      setUpdatingPickup(false);
+    }
+  };
 
   const fetchOrders = async (activeUser: CurrentUser, autoSelectId?: string | null) => {
     try {
@@ -181,18 +206,76 @@ export default function OrdersPage() {
     // Real-time socket updates for customer orders
     const socket = getSocket();
     if (socket) {
-      // Join customer role room for kitchen state change notifications
-      socket.emit('join_role_room', 'customer');
+      const joinRooms = () => {
+        socket.emit('join_role_room', 'customer');
+      };
+
+      if (socket.connected) {
+        joinRooms();
+      }
+      socket.on('connect', joinRooms);
 
       const handleOrderUpdate = (updatedOrder: any) => {
+        if (!updatedOrder) return;
+        const orderId = updatedOrder._id || updatedOrder.id;
+        const status = updatedOrder.status;
+        const orderNum = updatedOrder.orderNumber || (orderId || '').slice(-6).toUpperCase();
+
+        // Check if this updated order is in customer's order list
+        const isCustomerOrder =
+          ordersRef.current.some((o) => (o._id || o.id) === orderId) ||
+          (stored?.email && updatedOrder.customerEmail === stored.email);
+
+        if (isCustomerOrder) {
+          if (status === 'preparing') {
+            toast.info(`🍳 Kitchen Preparing Order #${orderNum}`, {
+              description: 'The kitchen chef has started preparing your food.',
+              duration: 6000,
+            });
+          } else if (status === 'ready') {
+            toast.success(
+              updatedOrder.orderType === 'takeaway'
+                ? `🥡 Order #${orderNum} is Ready for Pickup!`
+                : `🍽️ Order #${orderNum} is Ready!`,
+              {
+                description:
+                  updatedOrder.orderType === 'takeaway'
+                    ? 'Your takeaway food is ready! Collect your meal at the counter and click "Pick Up Food".'
+                    : 'Your food is hot and ready!',
+                duration: 7000,
+              }
+            );
+          } else if (status === 'served') {
+            toast.success(`🍽️ Order #${orderNum} Served`, {
+              description: 'Your food has been served to your table. Enjoy your meal!',
+              duration: 6000,
+            });
+          } else if (status === 'completed') {
+            toast.success(`✅ Order #${orderNum} Picked Up`, {
+              description: 'Takeaway food handover completed. Enjoy your meal!',
+              duration: 6000,
+            });
+          } else if (status === 'out_for_delivery') {
+            toast.info(`🛵 Order #${orderNum} Out for Delivery`, {
+              description: 'The delivery rider has picked up your food and is on the way.',
+              duration: 6000,
+            });
+          } else if (status === 'delivered') {
+            toast.success(`🏠 Order #${orderNum} Delivered`, {
+              description: 'Your order has been delivered. Enjoy your meal!',
+              duration: 6000,
+            });
+          }
+        }
+
         setOrders((prev) =>
           prev.map((o) =>
-            (o._id || o.id) === (updatedOrder._id || updatedOrder.id) ? { ...o, ...updatedOrder } : o
+            (o._id || o.id) === orderId ? { ...o, ...updatedOrder } : o
           )
         );
         setSelectedOrder((prev: any) => {
           if (!prev) return null;
-          if ((prev._id || prev.id) === (updatedOrder._id || updatedOrder.id)) {
+          if ((prev._id || prev.id) === orderId) {
             return { ...prev, ...updatedOrder };
           }
           return prev;
@@ -201,11 +284,9 @@ export default function OrdersPage() {
 
       // Listen for order updates with toast notifications for status changes
       const handleCustomerUpdate = (data: any) => {
-        // Also update order data in state
         if (data._id || data.id) {
           handleOrderUpdate(data);
         }
-        // Re-fetch orders to get the latest state
         fetchOrders(stored, selectedOrderIdParam);
       };
 
@@ -214,6 +295,7 @@ export default function OrdersPage() {
       socket.on('order:customer_update', handleCustomerUpdate);
 
       return () => {
+        socket.off('connect', joinRooms);
         socket.off('order:updated', handleOrderUpdate);
         socket.off('order:status-change', handleOrderUpdate);
         socket.off('order:customer_update', handleCustomerUpdate);
@@ -476,6 +558,49 @@ export default function OrdersPage() {
                         </div>
                       );
                     })()}
+
+                    {/* Takeaway Pick Up Food Action Card */}
+                    {selectedOrder.orderType === 'takeaway' && selectedOrder.status === 'ready' && (
+                      <div className="mt-6 rounded-xl border-2 border-emerald-500/50 bg-emerald-500/10 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm animate-in fade-in slide-in-from-top-2">
+                        <div className="flex items-center gap-3.5">
+                          <div className="h-12 w-12 rounded-xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-sm">
+                            <ShoppingBag className="h-6 w-6" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <h4 className="font-bold text-base text-foreground">
+                                Your Food is Ready for Pickup!
+                              </h4>
+                              <span className="flex h-2.5 w-2.5 relative">
+                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                                <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500" />
+                              </span>
+                            </div>
+                            <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                              The kitchen has completed your order. Please collect your meal at the counter and click below once received.
+                            </p>
+                          </div>
+                        </div>
+                        <Button
+                          type="button"
+                          onClick={() => handleConfirmPickup(selectedOrder)}
+                          disabled={updatingPickup}
+                          className="bg-emerald-600 hover:bg-emerald-700 text-white font-bold px-6 py-2.5 h-11 text-sm shrink-0 shadow-md transition-all active:scale-95 cursor-pointer"
+                        >
+                          {updatingPickup ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Confirming Pickup...
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle2 className="h-4 w-4 mr-2" />
+                              Pick Up Food
+                            </>
+                          )}
+                        </Button>
+                      </div>
+                    )}
 
                     {/* Timeline logs */}
                     {selectedOrder.timeline && selectedOrder.timeline.length > 0 && (
