@@ -7,7 +7,7 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
-import { Trash2, Plus, Minus, ShoppingBag, ArrowLeft, ArrowRight, Lock, LogIn } from 'lucide-react';
+import { Trash2, Plus, Minus, ShoppingBag, ArrowLeft, ArrowRight, Lock, LogIn, Utensils, Bike, CheckCircle2 } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
 import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon, getCouponMinSpend } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
@@ -291,26 +291,49 @@ export default function CartPage() {
             <CardContent className="space-y-4">
               {/* Order Type Selector */}
               <div>
-                <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Order Type</p>
-                <div className="grid grid-cols-3 gap-1.5 p-1 bg-muted/60 rounded-lg">
-                  {(['dine-in', 'takeaway', 'delivery'] as const).map((type) => (
-                    <button
-                      key={type}
-                      type="button"
-                      onClick={() => handleOrderTypeChange(type)}
-                      className={cn(
-                        'py-1.5 text-xs font-medium rounded-md transition-all capitalize',
-                        orderType === type
-                          ? 'bg-background text-foreground shadow-xs'
-                          : 'text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {type.replace('-', ' ')}
-                    </button>
-                  ))}
+                <div className="flex items-center justify-between mb-2">
+                  <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider">Order Type</p>
+                  <span className="text-[11px] font-medium text-muted-foreground">Select option</span>
                 </div>
-                {orderType !== 'delivery' && (
-                  <p className="mt-1 text-[11px] text-emerald-600 font-medium">✓ No delivery fee for {orderType.replace('-', ' ')}</p>
+                <div className="grid grid-cols-3 gap-2 p-1.5 bg-muted/50 rounded-xl border border-border/60">
+                  {[
+                    { key: 'dine-in', label: 'Dine In', icon: Utensils },
+                    { key: 'takeaway', label: 'Takeaway', icon: ShoppingBag },
+                    { key: 'delivery', label: 'Delivery', icon: Bike },
+                  ].map(({ key, label, icon: Icon }) => {
+                    const isActive = orderType === key;
+                    return (
+                      <button
+                        key={key}
+                        type="button"
+                        onClick={() => handleOrderTypeChange(key as any)}
+                        className={cn(
+                          'group relative flex flex-col items-center justify-center gap-1.5 py-2.5 px-2 rounded-lg text-xs cursor-pointer select-none transition-all duration-200 ease-out',
+                          isActive
+                            ? 'bg-primary text-primary-foreground font-bold shadow-md shadow-primary/25 scale-[1.02] ring-2 ring-primary/30'
+                            : 'text-muted-foreground bg-background/60 hover:bg-background hover:text-primary hover:shadow-xs hover:-translate-y-0.5 hover:scale-[1.02] active:scale-95 border border-transparent hover:border-primary/30 font-medium'
+                        )}
+                      >
+                        <Icon className={cn('h-4 w-4 transition-transform duration-200 group-hover:scale-115', isActive ? 'text-primary-foreground' : 'text-muted-foreground group-hover:text-primary')} />
+                        <span className="tracking-tight">{label}</span>
+                        {isActive && (
+                          <span className="absolute -top-1 -right-1 flex h-2.5 w-2.5">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+                          </span>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+                {orderType !== 'delivery' ? (
+                  <p className="mt-2 text-[11px] text-emerald-600 font-medium flex items-center gap-1.5 animate-in fade-in duration-200">
+                    <CheckCircle2 className="h-3.5 w-3.5" /> No delivery fee (৳0) for {orderType.replace('-', ' ')}
+                  </p>
+                ) : (
+                  <p className="mt-2 text-[11px] text-amber-600 font-medium flex items-center gap-1.5 animate-in fade-in duration-200">
+                    <Bike className="h-3.5 w-3.5" /> Delivery fee of ৳50 applies for home delivery
+                  </p>
                 )}
               </div>
 

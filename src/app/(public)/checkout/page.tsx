@@ -10,7 +10,7 @@ import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { ArrowLeft, CheckCircle2, CreditCard, Armchair, MapPin } from 'lucide-react';
+import { ArrowLeft, CheckCircle2, CreditCard, Armchair, MapPin, Utensils, ShoppingBag, Bike } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
 import { getCart, clearCart, type CartItem, getSavedCoupon, saveCoupon, clearCoupon, getCouponMinSpend } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
@@ -357,30 +357,55 @@ export default function CheckoutPage() {
         <div className="lg:col-span-2 space-y-6">
           {/* Order Type */}
           <Card>
-            <CardHeader><CardTitle className="text-lg">Order Type</CardTitle></CardHeader>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-lg">Order Type</CardTitle>
+                <span className="text-xs text-muted-foreground">Choose dining method</span>
+              </div>
+            </CardHeader>
             <CardContent>
               <div className="grid grid-cols-3 gap-3">
-                {(['dine-in', 'takeaway', 'delivery'] as const).map((type) => (
-                  <button
-                    key={type}
-                    type="button"
-                    onClick={() => {
-                      setOrderType(type);
-                      if (typeof window !== 'undefined') {
-                        localStorage.setItem('rms_order_type', type);
-                      }
-                      if (type !== 'dine-in') {
-                        setSelectedTableId('');
-                        setSelectedTableName('');
-                        setSelectedSeats([]);
-                        setTableNumber('');
-                      }
-                    }}
-                    className={cn('rounded-lg border-2 px-4 py-3 text-sm font-medium capitalize transition-colors', orderType === type ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent')}
-                  >
-                    {type.replace('-', ' ')}
-                  </button>
-                ))}
+                {[
+                  { key: 'dine-in', label: 'Dine In', icon: Utensils, note: 'Reserve table & seats' },
+                  { key: 'takeaway', label: 'Takeaway', icon: ShoppingBag, note: 'Pickup in store' },
+                  { key: 'delivery', label: 'Delivery', icon: Bike, note: 'Home delivery (৳50)' },
+                ].map(({ key, label, icon: Icon, note }) => {
+                  const isActive = orderType === key;
+                  return (
+                    <button
+                      key={key}
+                      type="button"
+                      onClick={() => {
+                        setOrderType(key as any);
+                        if (typeof window !== 'undefined') {
+                          localStorage.setItem('rms_order_type', key);
+                        }
+                        if (key !== 'dine-in') {
+                          setSelectedTableId('');
+                          setSelectedTableName('');
+                          setSelectedSeats([]);
+                          setTableNumber('');
+                        }
+                      }}
+                      className={cn(
+                        'group relative flex flex-col items-center justify-center gap-1.5 rounded-xl border-2 p-3 text-center transition-all duration-200 ease-out cursor-pointer select-none',
+                        isActive
+                          ? 'border-primary bg-primary/10 text-primary font-bold shadow-sm shadow-primary/10 scale-[1.02] ring-2 ring-primary/20'
+                          : 'border-border bg-card text-muted-foreground hover:border-primary/40 hover:bg-accent/70 hover:text-foreground hover:-translate-y-0.5 hover:shadow-xs active:scale-95'
+                      )}
+                    >
+                      <Icon className={cn('h-5 w-5 transition-transform duration-200 group-hover:scale-115', isActive ? 'text-primary' : 'text-muted-foreground group-hover:text-primary')} />
+                      <span className="text-sm font-semibold capitalize tracking-tight">{label}</span>
+                      <span className="text-[10px] text-muted-foreground">{note}</span>
+                      {isActive && (
+                        <span className="absolute -top-1.5 -right-1.5 flex h-3 w-3">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-primary opacity-75"></span>
+                          <span className="relative inline-flex rounded-full h-3 w-3 bg-primary"></span>
+                        </span>
+                      )}
+                    </button>
+                  );
+                })}
               </div>
             </CardContent>
           </Card>
