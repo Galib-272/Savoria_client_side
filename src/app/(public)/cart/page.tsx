@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Trash2, Plus, Minus, ShoppingBag, ArrowLeft, ArrowRight, Lock, LogIn } from 'lucide-react';
 import { formatCurrency } from '@/lib/utils';
-import { getCart, saveCart, type CartItem } from '@/lib/cart';
+import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -20,6 +20,8 @@ export default function CartPage() {
   const [couponCode, setCouponCode] = useState('');
   const [discount, setDiscount] = useState(0);
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
+  const [couponType, setCouponType] = useState<'percentage' | 'fixed'>('percentage');
+  const [couponValue, setCouponValue] = useState(0);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
@@ -29,6 +31,16 @@ export default function CartPage() {
   useEffect(() => {
     const loaded = getCart();
     setCart(loaded);
+
+    // Restore previously applied coupon
+    const saved = getSavedCoupon();
+    if (saved) {
+      setAppliedCoupon(saved.code);
+      setDiscount(saved.discountAmount);
+      setCouponCode(saved.code);
+      setCouponType(saved.type);
+      setCouponValue(saved.value);
+    }
 
     const handleUpdate = () => {
       setCart(getCart());
@@ -47,6 +59,23 @@ export default function CartPage() {
     });
   };
 
+  // Recalculate coupon discount when cart items change (quantity updates)
+  useEffect(() => {
+    if (!appliedCoupon || !couponValue) return;
+    const currentSubtotal = cart.reduce((sum, item) => {
+      const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
+      return sum + (item.price + modPrice) * item.quantity;
+    }, 0);
+    let newDiscount = 0;
+    if (couponType === 'percentage') {
+      newDiscount = Math.round((currentSubtotal * couponValue) / 100);
+    } else {
+      newDiscount = couponValue;
+    }
+    setDiscount(newDiscount);
+    saveCoupon({ code: appliedCoupon, type: couponType, value: couponValue, discountAmount: newDiscount });
+  }, [cart, appliedCoupon, couponType, couponValue]);
+
   const removeItem = (id: string) => {
     setCart((prev) => {
       const updated = prev.filter((c) => c.menuItemId !== id);
@@ -56,14 +85,31 @@ export default function CartPage() {
     toast.success('Item removed from cart');
   };
 
+  const removeCoupon = () => {
+    setDiscount(0);
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponType('percentage');
+    setCouponValue(0);
+    clearCoupon();
+    toast.success('Coupon removed');
+  };
+
   const applyCoupon = async () => {
     if (!couponCode.trim()) return;
     try {
       const res = await api.validateCoupon(couponCode.trim(), subtotal);
-      if (res && res.valid) {
-        setDiscount(res.discountAmount || 0);
-        setAppliedCoupon(res.coupon?.code || couponCode.toUpperCase());
-        toast.success(`Coupon ${res.coupon?.code || couponCode} applied! Saved ${formatCurrency(res.discountAmount || 0)}`);
+      if (res && res.success) {
+        const discountAmt = res.discount || 0;
+        const code = res.coupon?.code || couponCode.toUpperCase();
+        const type = res.coupon?.type || 'percentage';
+        const value = res.coupon?.value || 0;
+        setDiscount(discountAmt);
+        setAppliedCoupon(code);
+        setCouponType(type);
+        setCouponValue(value);
+        saveCoupon({ code, type, value, discountAmount: discountAmt });
+        toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)}`);
       } else {
         toast.error(res?.message || 'Invalid coupon code');
       }
@@ -165,15 +211,29 @@ export default function CartPage() {
               </Button>
               <div className="pt-2">
                 <p className="mb-2 text-xs text-muted-foreground">Have a coupon?</p>
-                <div className="flex gap-2">
-                  <Input
-                    placeholder="SAVE20"
-                    className="text-sm"
-                    value={couponCode}
-                    onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                  />
-                  <Button variant="outline" size="sm" onClick={applyCoupon}>Apply</Button>
-                </div>
+                {appliedCoupon ? (
+                  <div className="flex items-center justify-between rounded-lg border-2 border-dashed border-green-400/50 bg-green-50/50 px-3 py-2">
+                    <div>
+                      <span className="text-xs font-bold text-green-700">{appliedCoupon}</span>
+                      <span className="ml-2 text-xs text-green-600">
+                        ({couponType === 'percentage' ? `${couponValue}% off` : `৳${couponValue} off`})
+                      </span>
+                    </div>
+                    <Button variant="ghost" size="sm" className="h-7 text-xs text-destructive hover:text-destructive" onClick={removeCoupon}>
+                      <Trash2 className="mr-1 h-3 w-3" /> Remove
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="SAVE20"
+                      className="text-sm"
+                      value={couponCode}
+                      onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                    />
+                    <Button variant="outline" size="sm" onClick={applyCoupon}>Apply</Button>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

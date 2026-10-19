@@ -70,5 +70,35 @@ export function addToCart(
 export function clearCart() {
   if (typeof window === 'undefined') return;
   localStorage.removeItem('rms_cart');
+  localStorage.removeItem('rms_coupon');
   window.dispatchEvent(new Event('cart_updated'));
+}
+
+// ── Coupon persistence ──
+export interface SavedCoupon {
+  code: string;
+  type: 'percentage' | 'fixed';
+  value: number;
+  discountAmount: number;
+}
+
+export function saveCoupon(coupon: SavedCoupon) {
+  if (typeof window === 'undefined') return;
+  localStorage.setItem('rms_coupon', JSON.stringify(coupon));
+}
+
+export function getSavedCoupon(): SavedCoupon | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const raw = localStorage.getItem('rms_coupon');
+    if (!raw) return null;
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+export function clearCoupon() {
+  if (typeof window === 'undefined') return;
+  localStorage.removeItem('rms_coupon');
 }

@@ -4,13 +4,15 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { ArrowRight, Tag, Clock, TrendingUp } from 'lucide-react';
+import { ArrowRight, Tag, Clock, TrendingUp, Copy, Check } from 'lucide-react';
 import { offers as fallbackOffers, coupons as fallbackCoupons } from '@/lib/mock-data';
 import { api } from '@/lib/api';
 import type { Coupon } from '@/lib/types';
+import { toast } from 'sonner';
 
 export default function OffersPage() {
   const [couponList, setCouponList] = useState<Coupon[]>(fallbackCoupons);
+  const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
     api.getCoupons()
@@ -21,6 +23,13 @@ export default function OffersPage() {
       })
       .catch(console.error);
   }, []);
+
+  const handleCopyCode = (code: string) => {
+    navigator.clipboard.writeText(code);
+    setCopiedCode(code);
+    toast.success(`Coupon code ${code} copied to clipboard!`);
+    setTimeout(() => setCopiedCode(null), 2500);
+  };
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <div className="mb-8 text-center">
@@ -75,6 +84,22 @@ export default function OffersPage() {
                     <Clock className="h-3 w-3" /> Expires: {coupon.expiry}
                   </p>
                 </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="mt-4 w-full text-xs font-semibold"
+                  onClick={() => handleCopyCode(coupon.code)}
+                >
+                  {copiedCode === coupon.code ? (
+                    <>
+                      <Check className="mr-1.5 h-3.5 w-3.5 text-green-600" /> Copied!
+                    </>
+                  ) : (
+                    <>
+                      <Copy className="mr-1.5 h-3.5 w-3.5" /> Copy Code
+                    </>
+                  )}
+                </Button>
               </div>
             </div>
           ))}

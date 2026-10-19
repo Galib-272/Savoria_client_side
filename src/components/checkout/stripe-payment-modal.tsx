@@ -92,6 +92,8 @@ interface StripePaymentModalProps {
   subtotal?: number;
   tax?: number;
   deliveryFee?: number;
+  discount?: number;
+  couponCode?: string;
   onSuccess: (paymentData: { paymentMethod: string; stripePaymentIntentId: string }) => Promise<any> | any;
 }
 
@@ -107,6 +109,8 @@ export function StripePaymentModal({
   subtotal = 0,
   tax = 0,
   deliveryFee = 0,
+  discount = 0,
+  couponCode = '',
   onSuccess,
 }: StripePaymentModalProps) {
   const router = useRouter();
@@ -357,6 +361,12 @@ export function StripePaymentModal({
                 <span>Subtotal</span>
                 <span className="font-medium text-[#1a1f36]">{formatCurrency(displaySubtotal)}</span>
               </div>
+              {discount > 0 && (
+                <div className="flex justify-between text-[#00a854] font-medium">
+                  <span>Discount {couponCode ? `(${couponCode})` : ''}</span>
+                  <span>-{formatCurrency(discount)}</span>
+                </div>
+              )}
               {deliveryFee > 0 && (
                 <div className="flex justify-between">
                   <span>Delivery fee</span>

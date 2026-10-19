@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, CheckCircle2, CreditCard, Armchair, MapPin } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
-import { getCart, clearCart, type CartItem } from '@/lib/cart';
+import { getCart, clearCart, type CartItem, getSavedCoupon, saveCoupon, clearCoupon } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -38,6 +38,13 @@ export default function CheckoutPage() {
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
   const [stripeModalOpen, setStripeModalOpen] = useState(false);
 
+  // Coupon state
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
+  const [discount, setDiscount] = useState(0);
+  const [couponType, setCouponType] = useState<'percentage' | 'fixed'>('percentage');
+  const [couponValue, setCouponValue] = useState(0);
+
   useEffect(() => {
     const user = getStoredUser();
     if (!user) {
@@ -51,15 +58,72 @@ export default function CheckoutPage() {
 
     const loaded = getCart();
     setCart(loaded);
+
+    // Restore applied coupon
+    const saved = getSavedCoupon();
+    if (saved) {
+      setAppliedCoupon(saved.code);
+      setDiscount(saved.discountAmount);
+      setCouponCode(saved.code);
+      setCouponType(saved.type);
+      setCouponValue(saved.value);
+    }
   }, [router]);
 
   const subtotal = cart.reduce((sum, item) => {
     const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
     return sum + (item.price + modPrice) * item.quantity;
   }, 0);
+
+  // Recalculate discount whenever subtotal or coupon parameters change
+  useEffect(() => {
+    if (!appliedCoupon || !couponValue) return;
+    let newDiscount = 0;
+    if (couponType === 'percentage') {
+      newDiscount = Math.round((subtotal * couponValue) / 100);
+    } else {
+      newDiscount = couponValue;
+    }
+    setDiscount(newDiscount);
+    saveCoupon({ code: appliedCoupon, type: couponType, value: couponValue, discountAmount: newDiscount });
+  }, [subtotal, appliedCoupon, couponType, couponValue]);
+
+  const applyCoupon = async () => {
+    if (!couponCode.trim()) return;
+    try {
+      const res = await api.validateCoupon(couponCode.trim(), subtotal);
+      if (res && res.success) {
+        const discountAmt = res.discount || 0;
+        const code = res.coupon?.code || couponCode.toUpperCase();
+        const type = res.coupon?.type || 'percentage';
+        const value = res.coupon?.value || 0;
+        setDiscount(discountAmt);
+        setAppliedCoupon(code);
+        setCouponType(type);
+        setCouponValue(value);
+        saveCoupon({ code, type, value, discountAmount: discountAmt });
+        toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)}`);
+      } else {
+        toast.error(res?.message || 'Invalid coupon code');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Invalid or expired coupon');
+    }
+  };
+
+  const removeCoupon = () => {
+    setDiscount(0);
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponType('percentage');
+    setCouponValue(0);
+    clearCoupon();
+    toast.success('Coupon removed');
+  };
+
   const tax = Math.round(subtotal * 0.1);
   const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
-  const total = subtotal + tax + deliveryFee;
+  const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
   const handleTableSeatSelect = (tableId: string, tableNum: number, tableName: string, seats: string[]) => {
     setSelectedTableId(tableId);
@@ -131,6 +195,8 @@ export default function CheckoutPage() {
           modifiers: c.modifiers || [],
         })),
         subtotal,
+        discount,
+        couponCode: appliedCoupon || undefined,
         tax,
         deliveryFee,
         total,
@@ -341,6 +407,12 @@ export default function CheckoutPage() {
               </div>
               <Separator />
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
+              {discount > 0 && (
+                <div className="flex justify-between text-sm text-green-600 font-medium">
+                  <span>Discount ({appliedCoupon})</span>
+                  <span>-{formatCurrency(discount)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
               {deliveryFee > 0 && <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>}
               <Separator />
@@ -366,6 +438,42 @@ export default function CheckoutPage() {
               <Button type="submit" className="w-full text-base font-bold h-11" disabled={submitting || cart.length === 0 || (orderType === 'dine-in' && selectedSeats.length === 0)}>
                 {submitting ? 'Processing Payment...' : orderType === 'dine-in' && selectedSeats.length === 0 ? 'Select Table & Seats First' : 'Proceed to Payment'}
               </Button>
+
+              {/* Coupon Code Section */}
+              <div className="pt-2">
+                <p className="mb-2 text-xs text-muted-foreground">Have a coupon?</p>
+                {appliedCoupon ? (
+                  <div className="flex items-center justify-between rounded-lg border-2 border-dashed border-green-400/50 bg-green-50/50 px-3 py-2">
+                    <div>
+                      <span className="text-xs font-bold text-green-700">{appliedCoupon}</span>
+                      <span className="ml-2 text-xs text-green-600">
+                        ({couponType === 'percentage' ? `${couponValue}% off` : `৳${couponValue} off`})
+                      </span>
+                    </div>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs text-destructive hover:text-destructive"
+                      onClick={removeCoupon}
+                    >
+                      Remove
+                    </Button>
+                  </div>
+                ) : (
+                  <div className="flex gap-2">
+                    <Input
+                      placeholder="SAVE20"
+                      className="text-sm"
+                      value={couponCode}
+                      onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                    />
+                    <Button type="button" variant="outline" size="sm" onClick={applyCoupon}>
+                      Apply
+                    </Button>
+                  </div>
+                )}
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -383,6 +491,8 @@ export default function CheckoutPage() {
         subtotal={subtotal}
         tax={tax}
         deliveryFee={deliveryFee}
+        discount={discount}
+        couponCode={appliedCoupon || undefined}
         onSuccess={async ({ paymentMethod: confirmedMethod, stripePaymentIntentId }) => {
           return await executeOrderCreation({
             payMethod: confirmedMethod,

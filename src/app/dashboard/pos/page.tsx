@@ -38,6 +38,13 @@ export default function POSPage() {
   const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [processing, setProcessing] = useState(false);
 
+  // Coupon state for POS cashier
+  const [couponCode, setCouponCode] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
+  const [discount, setDiscount] = useState(0);
+  const [couponType, setCouponType] = useState<'percentage' | 'fixed'>('percentage');
+  const [couponValue, setCouponValue] = useState(0);
+
   useEffect(() => {
     // Fetch live categories and menu items
     api.getCategories().then((cats) => {
@@ -92,8 +99,55 @@ export default function POSPage() {
   };
 
   const subtotal = useMemo(() => cart.reduce((sum, item) => sum + item.price * item.quantity, 0), [cart]);
+
+  // Recalculate discount whenever subtotal or coupon settings change
+  useEffect(() => {
+    if (!appliedCoupon || !couponValue) {
+      setDiscount(0);
+      return;
+    }
+    let newDiscount = 0;
+    if (couponType === 'percentage') {
+      newDiscount = Math.round((subtotal * couponValue) / 100);
+    } else {
+      newDiscount = couponValue;
+    }
+    setDiscount(newDiscount);
+  }, [subtotal, appliedCoupon, couponType, couponValue]);
+
+  const applyCoupon = async () => {
+    if (!couponCode.trim()) return;
+    try {
+      const res = await api.validateCoupon(couponCode.trim(), subtotal);
+      if (res && res.success) {
+        const discountAmt = res.discount || 0;
+        const code = res.coupon?.code || couponCode.toUpperCase();
+        const type = res.coupon?.type || 'percentage';
+        const value = res.coupon?.value || 0;
+        setDiscount(discountAmt);
+        setAppliedCoupon(code);
+        setCouponType(type);
+        setCouponValue(value);
+        toast.success(`Coupon ${code} applied! Discount: ${formatCurrency(discountAmt)}`);
+      } else {
+        toast.error(res?.message || 'Invalid coupon code');
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Invalid or expired coupon');
+    }
+  };
+
+  const removeCoupon = () => {
+    setDiscount(0);
+    setAppliedCoupon(null);
+    setCouponCode('');
+    setCouponType('percentage');
+    setCouponValue(0);
+    toast.success('Coupon removed');
+  };
+
   const tax = Math.round(subtotal * 0.1);
-  const total = subtotal + tax;
+  const total = Math.max(0, subtotal - discount + tax);
 
   const handleCheckout = async () => {
     if (!cart.length) {
@@ -109,6 +163,11 @@ export default function POSPage() {
         orderType,
         tableNumber: orderType === 'dine-in' ? Number(tableNumber) || 1 : undefined,
         address: orderType === 'delivery' ? deliveryAddress || 'Dhaka' : undefined,
+        subtotal,
+        discount,
+        couponCode: appliedCoupon || undefined,
+        tax,
+        total,
         items: cart.map((c) => ({
           menuItemId: c.menuItemId,
           name: c.name,
@@ -117,18 +176,19 @@ export default function POSPage() {
         })),
       });
 
-      const newOrder = orderRes.data;
+      const newOrder = orderRes?.order || orderRes?.data || orderRes;
 
       // 2. Process payment (Cashier billing)
       const payMethodKey = paymentMethod.toLowerCase().replace(/ /g, '_');
       const payRes = await api.processPayment({
         orderId: newOrder._id || newOrder.id,
-        amount: newOrder.total,
+        amount: newOrder.total ?? total,
         paymentMethod: payMethodKey === 'mobile_banking' ? 'mobile_banking' : payMethodKey === 'card' ? 'card' : 'cash',
       });
 
-      toast.success(`Payment completed! Receipt: ${payRes.receiptNumber || 'REC-1025'}`);
+      toast.success(`Payment completed! Receipt: ${payRes?.receiptNumber || 'REC-1025'}`);
       setCart([]);
+      removeCoupon();
       setCheckoutOpen(false);
     } catch (err: any) {
       toast.error(err.message || 'Payment processing failed');
@@ -247,11 +307,53 @@ export default function POSPage() {
               {cart.length > 0 && (
                 <div className="border-t border-border p-4 space-y-2">
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
+                  {discount > 0 && (
+                    <div className="flex justify-between text-sm text-green-600 font-medium">
+                      <span>Discount ({appliedCoupon})</span>
+                      <span>-{formatCurrency(discount)}</span>
+                    </div>
+                  )}
                   <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
                   <Separator />
                   <div className="flex justify-between font-bold"><span>Total</span><span className="text-primary text-lg">{formatCurrency(total)}</span></div>
-                  <Button className="w-full" onClick={() => setCheckoutOpen(true)}>
-                    <Receipt className="mr-2 h-4 w-4" /> Checkout
+
+                  {/* Quick Coupon Input for POS */}
+                  <div className="pt-2 pb-1">
+                    <p className="mb-1.5 text-xs text-muted-foreground">Apply Coupon Code</p>
+                    {appliedCoupon ? (
+                      <div className="flex items-center justify-between rounded-lg border-2 border-dashed border-green-400/50 bg-green-50/50 px-2.5 py-1.5">
+                        <div className="text-xs">
+                          <span className="font-bold text-green-700">{appliedCoupon}</span>
+                          <span className="ml-1 text-green-600">
+                            ({couponType === 'percentage' ? `${couponValue}% off` : `৳${couponValue}`})
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-6 px-1.5 text-xs text-destructive hover:text-destructive"
+                          onClick={removeCoupon}
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    ) : (
+                      <div className="flex gap-1.5">
+                        <Input
+                          placeholder="SAVE20"
+                          className="h-8 text-xs uppercase"
+                          value={couponCode}
+                          onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                        />
+                        <Button variant="outline" size="sm" className="h-8 px-2.5 text-xs" onClick={applyCoupon}>
+                          Apply
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+
+                  <Button className="w-full mt-2" onClick={() => setCheckoutOpen(true)}>
+                    <Receipt className="mr-2 h-4 w-4" /> Checkout ({formatCurrency(total)})
                   </Button>
                 </div>
               )}
@@ -290,7 +392,7 @@ export default function POSPage() {
             {orderType === 'delivery' && (
               <div>
                 <p className="mb-2 text-sm font-medium">Delivery Address</p>
-                <Input placeholder="Customer address" />
+                <Input placeholder="Customer address" value={deliveryAddress} onChange={(e) => setDeliveryAddress(e.target.value)} />
               </div>
             )}
 
@@ -307,6 +409,12 @@ export default function POSPage() {
 
             <div className="rounded-lg border border-border p-4 space-y-2">
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
+              {discount > 0 && (
+                <div className="flex justify-between text-sm text-green-600 font-medium">
+                  <span>Discount ({appliedCoupon})</span>
+                  <span>-{formatCurrency(discount)}</span>
+                </div>
+              )}
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
               <Separator />
               <div className="flex justify-between font-bold text-lg"><span>Total</span><span className="text-primary">{formatCurrency(total)}</span></div>
