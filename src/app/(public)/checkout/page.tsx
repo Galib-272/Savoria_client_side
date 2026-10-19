@@ -12,7 +12,7 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, CheckCircle2, CreditCard, Armchair, MapPin } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
-import { getCart, clearCart, type CartItem, getSavedCoupon, saveCoupon, clearCoupon } from '@/lib/cart';
+import { getCart, clearCart, type CartItem, getSavedCoupon, saveCoupon, clearCoupon, getCouponMinSpend } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -73,19 +73,34 @@ export default function CheckoutPage() {
       return sum + (item.price + modPrice) * item.quantity;
     }, 0);
 
-    // Restore applied coupon if minimum order constraint is met
+    // Restore applied coupon ONLY if minimum order constraint is strictly met
     const saved = getSavedCoupon();
     if (saved) {
-      if (saved.minOrder && loadedSubtotal < saved.minOrder) {
+      const minRequired = getCouponMinSpend(saved.code, saved.minOrder);
+      if (loadedSubtotal < minRequired) {
         clearCoupon();
+        setAppliedCoupon(null);
+        setDiscount(0);
       } else {
         setAppliedCoupon(saved.code);
-        setDiscount(saved.discountAmount);
         setCouponCode(saved.code);
         setCouponType(saved.type);
         setCouponValue(saved.value);
-        setCouponMinOrder(saved.minOrder || 0);
+        setCouponMinOrder(minRequired);
         setCouponMaxDiscount(saved.maxDiscount);
+        api.validateCoupon(saved.code, loadedSubtotal).then((res) => {
+          if (res && res.success) {
+            setDiscount(res.discount);
+          } else {
+            clearCoupon();
+            setAppliedCoupon(null);
+            setDiscount(0);
+          }
+        }).catch(() => {
+          clearCoupon();
+          setAppliedCoupon(null);
+          setDiscount(0);
+        });
       }
     }
   }, [router]);
@@ -99,13 +114,16 @@ export default function CheckoutPage() {
   useEffect(() => {
     if (!appliedCoupon || !couponValue) return;
 
-    if (couponMinOrder > 0 && subtotal < couponMinOrder) {
+    const minRequired = getCouponMinSpend(appliedCoupon, couponMinOrder);
+
+    // Strictly enforce minimum spend requirement on the food subtotal ("main money")
+    if (minRequired > 0 && subtotal < minRequired) {
       setDiscount(0);
       setAppliedCoupon(null);
       setCouponMinOrder(0);
       setCouponMaxDiscount(undefined);
       clearCoupon();
-      toast.error(`Coupon ${appliedCoupon} removed: minimum spend of ৳${couponMinOrder} is required.`);
+      toast.error(`Coupon ${appliedCoupon} removed: requires minimum spend of ৳${minRequired}. Current food subtotal is ৳${subtotal}.`);
       return;
     }
 
@@ -123,7 +141,7 @@ export default function CheckoutPage() {
       code: appliedCoupon,
       type: couponType,
       value: couponValue,
-      minOrder: couponMinOrder,
+      minOrder: minRequired,
       maxDiscount: couponMaxDiscount,
       discountAmount: newDiscount,
     });
@@ -131,18 +149,26 @@ export default function CheckoutPage() {
 
   const applyCoupon = async () => {
     if (!couponCode.trim()) return;
+    const code = couponCode.trim().toUpperCase();
+    const minKnown = getCouponMinSpend(code, 0);
+
+    // Ensure coupon can only apply if the main item subtotal reaches the minimum requirement
+    if (minKnown > 0 && subtotal < minKnown) {
+      toast.error(`Minimum food spend of ৳${minKnown} required to apply coupon ${code}. Current food subtotal is ${formatCurrency(subtotal)}.`);
+      return;
+    }
+
     try {
-      const res = await api.validateCoupon(couponCode.trim(), subtotal);
+      const res = await api.validateCoupon(code, subtotal);
       if (res && res.success) {
         const discountAmt = res.discount || 0;
-        const code = res.coupon?.code || couponCode.toUpperCase();
         const type = res.coupon?.type || 'percentage';
         const value = res.coupon?.value || 0;
-        const minOrder = res.coupon?.minOrder || 0;
+        const minOrder = res.coupon?.minOrder || minKnown;
         const maxDiscount = res.coupon?.maxDiscount;
 
         if (minOrder > 0 && subtotal < minOrder) {
-          toast.error(`Minimum spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+          toast.error(`Minimum food spend of ৳${minOrder} required to apply coupon ${code}. Current food subtotal is ${formatCurrency(subtotal)}.`);
           return;
         }
 
@@ -160,7 +186,7 @@ export default function CheckoutPage() {
           maxDiscount,
           discountAmount: discountAmt,
         });
-        toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)}`);
+        toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)} on food subtotal.`);
       } else {
         toast.error(res?.message || 'Invalid coupon code');
       }

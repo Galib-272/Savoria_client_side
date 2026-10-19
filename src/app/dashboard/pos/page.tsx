@@ -13,6 +13,7 @@ import type { MenuItem, MenuCategory } from '@/lib/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
+import { getCouponMinSpend } from '@/lib/cart';
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', minimumFractionDigits: 0 }).format(amount);
@@ -110,12 +111,14 @@ export default function POSPage() {
       return;
     }
 
-    if (couponMinOrder > 0 && subtotal < couponMinOrder) {
+    const minRequired = getCouponMinSpend(appliedCoupon, couponMinOrder);
+
+    if (minRequired > 0 && subtotal < minRequired) {
       setDiscount(0);
       setAppliedCoupon(null);
       setCouponMinOrder(0);
       setCouponMaxDiscount(undefined);
-      toast.error(`Coupon ${appliedCoupon} removed: minimum spend of ৳${couponMinOrder} required.`);
+      toast.error(`Coupon ${appliedCoupon} removed: requires minimum spend of ৳${minRequired}. Current subtotal is ৳${subtotal}.`);
       return;
     }
 
@@ -133,18 +136,25 @@ export default function POSPage() {
 
   const applyCoupon = async () => {
     if (!couponCode.trim()) return;
+    const code = couponCode.trim().toUpperCase();
+    const minKnown = getCouponMinSpend(code, 0);
+
+    if (minKnown > 0 && subtotal < minKnown) {
+      toast.error(`Minimum food spend of ৳${minKnown} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+      return;
+    }
+
     try {
-      const res = await api.validateCoupon(couponCode.trim(), subtotal);
+      const res = await api.validateCoupon(code, subtotal);
       if (res && res.success) {
         const discountAmt = res.discount || 0;
-        const code = res.coupon?.code || couponCode.toUpperCase();
         const type = res.coupon?.type || 'percentage';
         const value = res.coupon?.value || 0;
-        const minOrder = res.coupon?.minOrder || 0;
+        const minOrder = res.coupon?.minOrder || minKnown;
         const maxDiscount = res.coupon?.maxDiscount;
 
         if (minOrder > 0 && subtotal < minOrder) {
-          toast.error(`Minimum spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+          toast.error(`Minimum food spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
           return;
         }
 

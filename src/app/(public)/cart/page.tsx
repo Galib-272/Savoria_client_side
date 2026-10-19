@@ -9,7 +9,7 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Trash2, Plus, Minus, ShoppingBag, ArrowLeft, ArrowRight, Lock, LogIn } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
-import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon } from '@/lib/cart';
+import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon, getCouponMinSpend } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -46,19 +46,35 @@ export default function CartPage() {
       return sum + (item.price + modPrice) * item.quantity;
     }, 0);
 
-    // Restore previously applied coupon if minimum order constraint is satisfied
+    // Restore previously applied coupon ONLY if minimum order constraint is strictly met
     const saved = getSavedCoupon();
     if (saved) {
-      if (saved.minOrder && loadedSubtotal < saved.minOrder) {
+      const minRequired = getCouponMinSpend(saved.code, saved.minOrder);
+      if (loadedSubtotal < minRequired) {
         clearCoupon();
+        setAppliedCoupon(null);
+        setDiscount(0);
       } else {
         setAppliedCoupon(saved.code);
-        setDiscount(saved.discountAmount);
         setCouponCode(saved.code);
         setCouponType(saved.type);
         setCouponValue(saved.value);
-        setCouponMinOrder(saved.minOrder || 0);
+        setCouponMinOrder(minRequired);
         setCouponMaxDiscount(saved.maxDiscount);
+        // Verify with server
+        api.validateCoupon(saved.code, loadedSubtotal).then((res) => {
+          if (res && res.success) {
+            setDiscount(res.discount);
+          } else {
+            clearCoupon();
+            setAppliedCoupon(null);
+            setDiscount(0);
+          }
+        }).catch(() => {
+          clearCoupon();
+          setAppliedCoupon(null);
+          setDiscount(0);
+        });
       }
     }
 
@@ -87,14 +103,16 @@ export default function CartPage() {
       return sum + (item.price + modPrice) * item.quantity;
     }, 0);
 
-    // Enforce minimum spend requirement
-    if (couponMinOrder > 0 && currentSubtotal < couponMinOrder) {
+    const minRequired = getCouponMinSpend(appliedCoupon, couponMinOrder);
+
+    // Strictly enforce minimum spend requirement on the food subtotal ("main money")
+    if (minRequired > 0 && currentSubtotal < minRequired) {
       setDiscount(0);
       setAppliedCoupon(null);
       setCouponMinOrder(0);
       setCouponMaxDiscount(undefined);
       clearCoupon();
-      toast.error(`Coupon ${appliedCoupon} removed: minimum spend of ৳${couponMinOrder} is required.`);
+      toast.error(`Coupon ${appliedCoupon} removed: requires minimum spend of ৳${minRequired}. Current food subtotal is ৳${currentSubtotal}.`);
       return;
     }
 
@@ -112,7 +130,7 @@ export default function CartPage() {
       code: appliedCoupon,
       type: couponType,
       value: couponValue,
-      minOrder: couponMinOrder,
+      minOrder: minRequired,
       maxDiscount: couponMaxDiscount,
       discountAmount: newDiscount,
     });
@@ -148,18 +166,26 @@ export default function CartPage() {
 
   const applyCoupon = async () => {
     if (!couponCode.trim()) return;
+    const code = couponCode.trim().toUpperCase();
+    const minKnown = getCouponMinSpend(code, 0);
+
+    // Ensure coupon can only apply if the main item subtotal reaches the minimum requirement
+    if (minKnown > 0 && subtotal < minKnown) {
+      toast.error(`Minimum food spend of ৳${minKnown} required to apply coupon ${code}. Current food subtotal is ${formatCurrency(subtotal)}.`);
+      return;
+    }
+
     try {
-      const res = await api.validateCoupon(couponCode.trim(), subtotal);
+      const res = await api.validateCoupon(code, subtotal);
       if (res && res.success) {
         const discountAmt = res.discount || 0;
-        const code = res.coupon?.code || couponCode.toUpperCase();
         const type = res.coupon?.type || 'percentage';
         const value = res.coupon?.value || 0;
-        const minOrder = res.coupon?.minOrder || 0;
+        const minOrder = res.coupon?.minOrder || minKnown;
         const maxDiscount = res.coupon?.maxDiscount;
 
         if (minOrder > 0 && subtotal < minOrder) {
-          toast.error(`Minimum spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+          toast.error(`Minimum food spend of ৳${minOrder} required to apply coupon ${code}. Current food subtotal is ${formatCurrency(subtotal)}.`);
           return;
         }
 
@@ -177,7 +203,7 @@ export default function CartPage() {
           maxDiscount,
           discountAmount: discountAmt,
         });
-        toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)}`);
+        toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)} on food subtotal.`);
       } else {
         toast.error(res?.message || 'Invalid coupon code');
       }
@@ -329,14 +355,19 @@ export default function CartPage() {
                     </Button>
                   </div>
                 ) : (
-                  <div className="flex gap-2">
-                    <Input
-                      placeholder="SAVE20"
-                      className="text-sm"
-                      value={couponCode}
-                      onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
-                    />
-                    <Button variant="outline" size="sm" onClick={applyCoupon}>Apply</Button>
+                  <div className="space-y-1.5">
+                    <div className="flex gap-2">
+                      <Input
+                        placeholder="SAVE20"
+                        className="text-sm uppercase"
+                        value={couponCode}
+                        onChange={(e) => setCouponCode(e.target.value.toUpperCase())}
+                      />
+                      <Button variant="outline" size="sm" onClick={applyCoupon}>Apply</Button>
+                    </div>
+                    <p className="text-[11px] text-muted-foreground leading-snug">
+                      Offers: <span className="font-semibold text-primary">SAVE20</span> (min spend ৳400) • <span className="font-semibold text-primary">SAVE30</span> (min spend ৳500)
+                    </p>
                   </div>
                 )}
               </div>

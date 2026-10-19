@@ -100,6 +100,21 @@ export function getSavedCoupon(): SavedCoupon | null {
   }
 }
 
+export const DEFAULT_COUPON_MIN_SPEND: Record<string, number> = {
+  SAVE20: 400,
+  SAVE30: 500,
+  WEEKEND50: 300,
+  FREEDEL: 600,
+  COMBO15: 800,
+};
+
+export function getCouponMinSpend(code?: string | null, explicitMinOrder?: number): number {
+  if (explicitMinOrder !== undefined && explicitMinOrder > 0) return explicitMinOrder;
+  if (!code) return 0;
+  const upper = code.toUpperCase().trim();
+  return DEFAULT_COUPON_MIN_SPEND[upper] || 0;
+}
+
 export function clearCoupon() {
   if (typeof window === 'undefined') return;
   localStorage.removeItem('rms_coupon');
