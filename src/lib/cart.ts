@@ -79,6 +79,8 @@ export interface SavedCoupon {
   code: string;
   type: 'percentage' | 'fixed';
   value: number;
+  minOrder?: number;
+  maxDiscount?: number;
   discountAmount: number;
 }
 

@@ -23,7 +23,7 @@ import { TableSeatSelector } from '@/components/checkout/table-seat-selector';
 export default function CheckoutPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
-  const [orderType, setOrderType] = useState<'dine-in' | 'takeaway' | 'delivery'>('delivery');
+  const [orderType, setOrderType] = useState<'dine-in' | 'takeaway' | 'delivery'>('dine-in');
   const [paymentMethod, setPaymentMethod] = useState('cash');
   const [name, setName] = useState('');
   const [phone, setPhone] = useState('');
@@ -44,6 +44,8 @@ export default function CheckoutPage() {
   const [discount, setDiscount] = useState(0);
   const [couponType, setCouponType] = useState<'percentage' | 'fixed'>('percentage');
   const [couponValue, setCouponValue] = useState(0);
+  const [couponMinOrder, setCouponMinOrder] = useState<number>(0);
+  const [couponMaxDiscount, setCouponMaxDiscount] = useState<number | undefined>(undefined);
 
   useEffect(() => {
     const user = getStoredUser();
@@ -56,17 +58,35 @@ export default function CheckoutPage() {
     if (user.email) setEmail(user.email);
     if (user.phone) setPhone(user.phone);
 
+    if (typeof window !== 'undefined') {
+      const storedOrderType = localStorage.getItem('rms_order_type') as 'dine-in' | 'takeaway' | 'delivery';
+      if (storedOrderType) {
+        setOrderType(storedOrderType);
+      }
+    }
+
     const loaded = getCart();
     setCart(loaded);
 
-    // Restore applied coupon
+    const loadedSubtotal = loaded.reduce((sum, item) => {
+      const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
+      return sum + (item.price + modPrice) * item.quantity;
+    }, 0);
+
+    // Restore applied coupon if minimum order constraint is met
     const saved = getSavedCoupon();
     if (saved) {
-      setAppliedCoupon(saved.code);
-      setDiscount(saved.discountAmount);
-      setCouponCode(saved.code);
-      setCouponType(saved.type);
-      setCouponValue(saved.value);
+      if (saved.minOrder && loadedSubtotal < saved.minOrder) {
+        clearCoupon();
+      } else {
+        setAppliedCoupon(saved.code);
+        setDiscount(saved.discountAmount);
+        setCouponCode(saved.code);
+        setCouponType(saved.type);
+        setCouponValue(saved.value);
+        setCouponMinOrder(saved.minOrder || 0);
+        setCouponMaxDiscount(saved.maxDiscount);
+      }
     }
   }, [router]);
 
@@ -78,15 +98,36 @@ export default function CheckoutPage() {
   // Recalculate discount whenever subtotal or coupon parameters change
   useEffect(() => {
     if (!appliedCoupon || !couponValue) return;
+
+    if (couponMinOrder > 0 && subtotal < couponMinOrder) {
+      setDiscount(0);
+      setAppliedCoupon(null);
+      setCouponMinOrder(0);
+      setCouponMaxDiscount(undefined);
+      clearCoupon();
+      toast.error(`Coupon ${appliedCoupon} removed: minimum spend of ৳${couponMinOrder} is required.`);
+      return;
+    }
+
     let newDiscount = 0;
     if (couponType === 'percentage') {
       newDiscount = Math.round((subtotal * couponValue) / 100);
+      if (couponMaxDiscount && newDiscount > couponMaxDiscount) {
+        newDiscount = couponMaxDiscount;
+      }
     } else {
       newDiscount = couponValue;
     }
     setDiscount(newDiscount);
-    saveCoupon({ code: appliedCoupon, type: couponType, value: couponValue, discountAmount: newDiscount });
-  }, [subtotal, appliedCoupon, couponType, couponValue]);
+    saveCoupon({
+      code: appliedCoupon,
+      type: couponType,
+      value: couponValue,
+      minOrder: couponMinOrder,
+      maxDiscount: couponMaxDiscount,
+      discountAmount: newDiscount,
+    });
+  }, [subtotal, appliedCoupon, couponType, couponValue, couponMinOrder, couponMaxDiscount]);
 
   const applyCoupon = async () => {
     if (!couponCode.trim()) return;
@@ -97,11 +138,28 @@ export default function CheckoutPage() {
         const code = res.coupon?.code || couponCode.toUpperCase();
         const type = res.coupon?.type || 'percentage';
         const value = res.coupon?.value || 0;
+        const minOrder = res.coupon?.minOrder || 0;
+        const maxDiscount = res.coupon?.maxDiscount;
+
+        if (minOrder > 0 && subtotal < minOrder) {
+          toast.error(`Minimum spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+          return;
+        }
+
         setDiscount(discountAmt);
         setAppliedCoupon(code);
         setCouponType(type);
         setCouponValue(value);
-        saveCoupon({ code, type, value, discountAmount: discountAmt });
+        setCouponMinOrder(minOrder);
+        setCouponMaxDiscount(maxDiscount);
+        saveCoupon({
+          code,
+          type,
+          value,
+          minOrder,
+          maxDiscount,
+          discountAmount: discountAmt,
+        });
         toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)}`);
       } else {
         toast.error(res?.message || 'Invalid coupon code');
@@ -117,11 +175,14 @@ export default function CheckoutPage() {
     setCouponCode('');
     setCouponType('percentage');
     setCouponValue(0);
+    setCouponMinOrder(0);
+    setCouponMaxDiscount(undefined);
     clearCoupon();
     toast.success('Coupon removed');
   };
 
   const tax = Math.round(subtotal * 0.1);
+  // Delivery fee applies strictly for delivery orders only
   const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
   const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
@@ -274,7 +335,23 @@ export default function CheckoutPage() {
             <CardContent>
               <div className="grid grid-cols-3 gap-3">
                 {(['dine-in', 'takeaway', 'delivery'] as const).map((type) => (
-                  <button key={type} type="button" onClick={() => { setOrderType(type); if (type !== 'dine-in') { setSelectedTableId(''); setSelectedTableName(''); setSelectedSeats([]); setTableNumber(''); } }} className={cn('rounded-lg border-2 px-4 py-3 text-sm font-medium capitalize transition-colors', orderType === type ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent')}>
+                  <button
+                    key={type}
+                    type="button"
+                    onClick={() => {
+                      setOrderType(type);
+                      if (typeof window !== 'undefined') {
+                        localStorage.setItem('rms_order_type', type);
+                      }
+                      if (type !== 'dine-in') {
+                        setSelectedTableId('');
+                        setSelectedTableName('');
+                        setSelectedSeats([]);
+                        setTableNumber('');
+                      }
+                    }}
+                    className={cn('rounded-lg border-2 px-4 py-3 text-sm font-medium capitalize transition-colors', orderType === type ? 'border-primary bg-primary/10 text-primary' : 'border-border hover:bg-accent')}
+                  >
                     {type.replace('-', ' ')}
                   </button>
                 ))}
@@ -414,7 +491,12 @@ export default function CheckoutPage() {
                 </div>
               )}
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
-              {deliveryFee > 0 && <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>}
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Delivery Fee</span>
+                <span className={deliveryFee === 0 ? 'text-emerald-600 font-medium' : ''}>
+                  {deliveryFee === 0 ? '৳0 (Free)' : formatCurrency(deliveryFee)}
+                </span>
+              </div>
               <Separator />
 
               {/* Dine-in seat info in summary */}

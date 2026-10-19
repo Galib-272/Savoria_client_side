@@ -8,7 +8,7 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Trash2, Plus, Minus, ShoppingBag, ArrowLeft, ArrowRight, Lock, LogIn } from 'lucide-react';
-import { formatCurrency } from '@/lib/utils';
+import { formatCurrency, cn } from '@/lib/utils';
 import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
@@ -17,29 +17,49 @@ import { toast } from 'sonner';
 export default function CartPage() {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
+  const [orderType, setOrderType] = useState<'dine-in' | 'takeaway' | 'delivery'>('dine-in');
   const [couponCode, setCouponCode] = useState('');
   const [discount, setDiscount] = useState(0);
   const [appliedCoupon, setAppliedCoupon] = useState<string | null>(null);
   const [couponType, setCouponType] = useState<'percentage' | 'fixed'>('percentage');
   const [couponValue, setCouponValue] = useState(0);
+  const [couponMinOrder, setCouponMinOrder] = useState<number>(0);
+  const [couponMaxDiscount, setCouponMaxDiscount] = useState<number | undefined>(undefined);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
     setIsLoggedIn(!!getStoredUser());
+    if (typeof window !== 'undefined') {
+      const storedOrderType = localStorage.getItem('rms_order_type') as 'dine-in' | 'takeaway' | 'delivery';
+      if (storedOrderType) {
+        setOrderType(storedOrderType);
+      }
+    }
   }, []);
 
   useEffect(() => {
     const loaded = getCart();
     setCart(loaded);
 
-    // Restore previously applied coupon
+    const loadedSubtotal = loaded.reduce((sum, item) => {
+      const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
+      return sum + (item.price + modPrice) * item.quantity;
+    }, 0);
+
+    // Restore previously applied coupon if minimum order constraint is satisfied
     const saved = getSavedCoupon();
     if (saved) {
-      setAppliedCoupon(saved.code);
-      setDiscount(saved.discountAmount);
-      setCouponCode(saved.code);
-      setCouponType(saved.type);
-      setCouponValue(saved.value);
+      if (saved.minOrder && loadedSubtotal < saved.minOrder) {
+        clearCoupon();
+      } else {
+        setAppliedCoupon(saved.code);
+        setDiscount(saved.discountAmount);
+        setCouponCode(saved.code);
+        setCouponType(saved.type);
+        setCouponValue(saved.value);
+        setCouponMinOrder(saved.minOrder || 0);
+        setCouponMaxDiscount(saved.maxDiscount);
+      }
     }
 
     const handleUpdate = () => {
@@ -66,15 +86,37 @@ export default function CartPage() {
       const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
       return sum + (item.price + modPrice) * item.quantity;
     }, 0);
+
+    // Enforce minimum spend requirement
+    if (couponMinOrder > 0 && currentSubtotal < couponMinOrder) {
+      setDiscount(0);
+      setAppliedCoupon(null);
+      setCouponMinOrder(0);
+      setCouponMaxDiscount(undefined);
+      clearCoupon();
+      toast.error(`Coupon ${appliedCoupon} removed: minimum spend of ৳${couponMinOrder} is required.`);
+      return;
+    }
+
     let newDiscount = 0;
     if (couponType === 'percentage') {
       newDiscount = Math.round((currentSubtotal * couponValue) / 100);
+      if (couponMaxDiscount && newDiscount > couponMaxDiscount) {
+        newDiscount = couponMaxDiscount;
+      }
     } else {
       newDiscount = couponValue;
     }
     setDiscount(newDiscount);
-    saveCoupon({ code: appliedCoupon, type: couponType, value: couponValue, discountAmount: newDiscount });
-  }, [cart, appliedCoupon, couponType, couponValue]);
+    saveCoupon({
+      code: appliedCoupon,
+      type: couponType,
+      value: couponValue,
+      minOrder: couponMinOrder,
+      maxDiscount: couponMaxDiscount,
+      discountAmount: newDiscount,
+    });
+  }, [cart, appliedCoupon, couponType, couponValue, couponMinOrder, couponMaxDiscount]);
 
   const removeItem = (id: string) => {
     setCart((prev) => {
@@ -91,8 +133,17 @@ export default function CartPage() {
     setCouponCode('');
     setCouponType('percentage');
     setCouponValue(0);
+    setCouponMinOrder(0);
+    setCouponMaxDiscount(undefined);
     clearCoupon();
     toast.success('Coupon removed');
+  };
+
+  const handleOrderTypeChange = (type: 'dine-in' | 'takeaway' | 'delivery') => {
+    setOrderType(type);
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rms_order_type', type);
+    }
   };
 
   const applyCoupon = async () => {
@@ -104,11 +155,28 @@ export default function CartPage() {
         const code = res.coupon?.code || couponCode.toUpperCase();
         const type = res.coupon?.type || 'percentage';
         const value = res.coupon?.value || 0;
+        const minOrder = res.coupon?.minOrder || 0;
+        const maxDiscount = res.coupon?.maxDiscount;
+
+        if (minOrder > 0 && subtotal < minOrder) {
+          toast.error(`Minimum spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+          return;
+        }
+
         setDiscount(discountAmt);
         setAppliedCoupon(code);
         setCouponType(type);
         setCouponValue(value);
-        saveCoupon({ code, type, value, discountAmount: discountAmt });
+        setCouponMinOrder(minOrder);
+        setCouponMaxDiscount(maxDiscount);
+        saveCoupon({
+          code,
+          type,
+          value,
+          minOrder,
+          maxDiscount,
+          discountAmount: discountAmt,
+        });
         toast.success(`Coupon ${code} applied! You save ${formatCurrency(discountAmt)}`);
       } else {
         toast.error(res?.message || 'Invalid coupon code');
@@ -125,6 +193,9 @@ export default function CartPage() {
       router.push('/login?redirect=/checkout');
       return;
     }
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('rms_order_type', orderType);
+    }
     router.push('/checkout');
   };
 
@@ -133,7 +204,8 @@ export default function CartPage() {
     return sum + (item.price + modPrice) * item.quantity;
   }, 0);
   const tax = Math.round(subtotal * 0.1);
-  const deliveryFee = cart.length > 0 ? 50 : 0;
+  // Delivery charge applies ONLY for delivery orders, never for dine-in or takeaway
+  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
   const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
   if (cart.length === 0) {
@@ -190,16 +262,49 @@ export default function CartPage() {
         <div className="lg:col-span-1">
           <Card className="sticky top-20">
             <CardHeader><CardTitle className="text-lg">Order Summary</CardTitle></CardHeader>
-            <CardContent className="space-y-3">
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
-              {discount > 0 && (
-                <div className="flex justify-between text-sm text-success font-medium">
-                  <span>Discount ({appliedCoupon})</span>
-                  <span>-{formatCurrency(discount)}</span>
+            <CardContent className="space-y-4">
+              {/* Order Type Selector */}
+              <div>
+                <p className="mb-2 text-xs font-semibold text-muted-foreground uppercase tracking-wider">Order Type</p>
+                <div className="grid grid-cols-3 gap-1.5 p-1 bg-muted/60 rounded-lg">
+                  {(['dine-in', 'takeaway', 'delivery'] as const).map((type) => (
+                    <button
+                      key={type}
+                      type="button"
+                      onClick={() => handleOrderTypeChange(type)}
+                      className={cn(
+                        'py-1.5 text-xs font-medium rounded-md transition-all capitalize',
+                        orderType === type
+                          ? 'bg-background text-foreground shadow-xs'
+                          : 'text-muted-foreground hover:text-foreground'
+                      )}
+                    >
+                      {type.replace('-', ' ')}
+                    </button>
+                  ))}
                 </div>
-              )}
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>
+                {orderType !== 'delivery' && (
+                  <p className="mt-1 text-[11px] text-emerald-600 font-medium">✓ No delivery fee for {orderType.replace('-', ' ')}</p>
+                )}
+              </div>
+
+              <div className="space-y-2 pt-1 border-t border-border/50">
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(subtotal)}</span></div>
+                {discount > 0 && (
+                  <div className="flex justify-between text-sm text-emerald-600 font-medium">
+                    <span>Discount ({appliedCoupon})</span>
+                    <span>-{formatCurrency(discount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-muted-foreground">Delivery Fee</span>
+                  <span className={deliveryFee === 0 ? 'text-emerald-600 font-medium' : ''}>
+                    {deliveryFee === 0 ? '৳0 (Free)' : formatCurrency(deliveryFee)}
+                  </span>
+                </div>
+              </div>
+
               <Separator />
               <div className="flex justify-between font-bold text-lg"><span>Total</span><span className="text-primary">{formatCurrency(total)}</span></div>
               <Button onClick={handleProceedToCheckout} className="w-full">

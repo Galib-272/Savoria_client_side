@@ -188,7 +188,16 @@ export default function OrderTrackingPage() {
             <Separator />
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Subtotal</span><span>{formatCurrency(order.subtotal)}</span></div>
             <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax</span><span>{formatCurrency(order.tax)}</span></div>
-            <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(order.deliveryFee)}</span></div>
+            {order.discount > 0 && (
+              <div className="flex justify-between text-sm text-emerald-600 font-medium">
+                <span>Discount</span><span>-{formatCurrency(order.discount)}</span>
+              </div>
+            )}
+            {order.deliveryFee > 0 ? (
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(order.deliveryFee)}</span></div>
+            ) : (
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span className="text-emerald-600 font-medium">৳0 (Free)</span></div>
+            )}
             <Separator />
             <div className="flex justify-between font-bold"><span>Total</span><span className="text-primary">{formatCurrency(order.total)}</span></div>
           </CardContent>

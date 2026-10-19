@@ -505,10 +505,11 @@ export const expenses: Expense[] = [
 ];
 
 export const coupons: Coupon[] = [
-  { id: 'cp-1', code: 'SAVE20', type: 'percentage', value: 20, minOrder: 500, maxDiscount: 300, expiry: '2026-10-30', usageLimit: 100, used: 34, active: true },
-  { id: 'cp-2', code: 'WEEKEND50', type: 'fixed', value: 50, minOrder: 300, maxDiscount: undefined, expiry: '2026-10-31', usageLimit: 50, used: 12, active: true },
-  { id: 'cp-3', code: 'FREEDEL', type: 'fixed', value: 50, minOrder: 1000, maxDiscount: undefined, expiry: '2026-11-15', usageLimit: 200, used: 67, active: true },
-  { id: 'cp-4', code: 'COMBO15', type: 'percentage', value: 15, minOrder: 800, maxDiscount: 200, expiry: '2026-10-20', usageLimit: 30, used: 30, active: false },
+  { id: 'cp-1', code: 'SAVE20', type: 'percentage', value: 20, minOrder: 400, maxDiscount: 300, expiry: '2026-10-30', usageLimit: 100, used: 34, active: true },
+  { id: 'cp-2', code: 'SAVE30', type: 'percentage', value: 30, minOrder: 500, maxDiscount: 400, expiry: '2026-10-31', usageLimit: 100, used: 12, active: true },
+  { id: 'cp-3', code: 'WEEKEND50', type: 'fixed', value: 50, minOrder: 300, maxDiscount: undefined, expiry: '2026-10-31', usageLimit: 50, used: 12, active: true },
+  { id: 'cp-4', code: 'FREEDEL', type: 'fixed', value: 50, minOrder: 600, maxDiscount: undefined, expiry: '2026-11-15', usageLimit: 200, used: 67, active: true },
+  { id: 'cp-5', code: 'COMBO15', type: 'percentage', value: 15, minOrder: 800, maxDiscount: 200, expiry: '2026-10-20', usageLimit: 30, used: 30, active: false },
 ];
 
 export const reviews: Review[] = [

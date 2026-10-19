@@ -45,6 +45,9 @@ export default function POSPage() {
   const [couponType, setCouponType] = useState<'percentage' | 'fixed'>('percentage');
   const [couponValue, setCouponValue] = useState(0);
 
+  const [couponMinOrder, setCouponMinOrder] = useState<number>(0);
+  const [couponMaxDiscount, setCouponMaxDiscount] = useState<number | undefined>(undefined);
+
   useEffect(() => {
     // Fetch live categories and menu items
     api.getCategories().then((cats) => {
@@ -106,14 +109,27 @@ export default function POSPage() {
       setDiscount(0);
       return;
     }
+
+    if (couponMinOrder > 0 && subtotal < couponMinOrder) {
+      setDiscount(0);
+      setAppliedCoupon(null);
+      setCouponMinOrder(0);
+      setCouponMaxDiscount(undefined);
+      toast.error(`Coupon ${appliedCoupon} removed: minimum spend of ৳${couponMinOrder} required.`);
+      return;
+    }
+
     let newDiscount = 0;
     if (couponType === 'percentage') {
       newDiscount = Math.round((subtotal * couponValue) / 100);
+      if (couponMaxDiscount && newDiscount > couponMaxDiscount) {
+        newDiscount = couponMaxDiscount;
+      }
     } else {
       newDiscount = couponValue;
     }
     setDiscount(newDiscount);
-  }, [subtotal, appliedCoupon, couponType, couponValue]);
+  }, [subtotal, appliedCoupon, couponType, couponValue, couponMinOrder, couponMaxDiscount]);
 
   const applyCoupon = async () => {
     if (!couponCode.trim()) return;
@@ -124,10 +140,20 @@ export default function POSPage() {
         const code = res.coupon?.code || couponCode.toUpperCase();
         const type = res.coupon?.type || 'percentage';
         const value = res.coupon?.value || 0;
+        const minOrder = res.coupon?.minOrder || 0;
+        const maxDiscount = res.coupon?.maxDiscount;
+
+        if (minOrder > 0 && subtotal < minOrder) {
+          toast.error(`Minimum spend of ৳${minOrder} required to apply coupon ${code}. Current subtotal is ${formatCurrency(subtotal)}.`);
+          return;
+        }
+
         setDiscount(discountAmt);
         setAppliedCoupon(code);
         setCouponType(type);
         setCouponValue(value);
+        setCouponMinOrder(minOrder);
+        setCouponMaxDiscount(maxDiscount);
         toast.success(`Coupon ${code} applied! Discount: ${formatCurrency(discountAmt)}`);
       } else {
         toast.error(res?.message || 'Invalid coupon code');
@@ -143,11 +169,15 @@ export default function POSPage() {
     setCouponCode('');
     setCouponType('percentage');
     setCouponValue(0);
+    setCouponMinOrder(0);
+    setCouponMaxDiscount(undefined);
     toast.success('Coupon removed');
   };
 
   const tax = Math.round(subtotal * 0.1);
-  const total = Math.max(0, subtotal - discount + tax);
+  // Delivery fee strictly for delivery orders only
+  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
+  const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
   const handleCheckout = async () => {
     if (!cart.length) {
@@ -167,6 +197,7 @@ export default function POSPage() {
         discount,
         couponCode: appliedCoupon || undefined,
         tax,
+        deliveryFee,
         total,
         items: cart.map((c) => ({
           menuItemId: c.menuItemId,
@@ -416,6 +447,9 @@ export default function POSPage() {
                 </div>
               )}
               <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
+              {deliveryFee > 0 && (
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>
+              )}
               <Separator />
               <div className="flex justify-between font-bold text-lg"><span>Total</span><span className="text-primary">{formatCurrency(total)}</span></div>
             </div>
