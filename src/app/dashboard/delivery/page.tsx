@@ -4,12 +4,13 @@ import { useEffect, useState } from 'react';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { Bike, MapPin, Phone, Package, CheckCircle, Clock, User } from 'lucide-react';
+import { Bike, MapPin, Phone, Package, CheckCircle, Clock, User, History } from 'lucide-react';
 import type { Order, OrderStatus } from '@/lib/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import Link from 'next/link';
 
 const formatCurrency = (amount: number) =>
   new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', minimumFractionDigits: 0 }).format(amount);
@@ -18,22 +19,31 @@ const deliveryColumns = [
   { key: 'ready', label: 'Ready for Pickup', color: 'bg-green-500' },
   { key: 'picked_up', label: 'Picked Up', color: 'bg-amber-500' },
   { key: 'out_for_delivery', label: 'Out for Delivery', color: 'bg-blue-500' },
-  { key: 'delivered', label: 'Delivered', color: 'bg-emerald-500' },
 ];
 
 export default function DeliveryPage() {
   const [deliveryOrders, setDeliveryOrders] = useState<Order[]>([]);
+  const [deliveredTodayCount, setDeliveredTodayCount] = useState<number>(0);
+
+  const fetchOrders = () => {
+    api.getOrders({ orderType: 'delivery' }).then((data) => {
+      if (data && data.length) {
+        const mapped = data.map((o: any) => ({ ...o, id: o._id || o.id }));
+        setDeliveryOrders(
+          mapped.filter((o: any) => ['ready', 'picked_up', 'out_for_delivery'].includes(o.status))
+        );
+        const todayStr = new Date().toDateString();
+        const deliveredToday = mapped.filter(
+          (o: any) => o.status === 'delivered' && new Date(o.completedAt || o.updatedAt || o.createdAt).toDateString() === todayStr
+        ).length;
+        setDeliveredTodayCount(deliveredToday);
+      }
+    }).catch(console.error);
+  };
 
   useEffect(() => {
     // 1. Fetch live delivery orders
-    api.getOrders({ orderType: 'delivery' }).then((data) => {
-      if (data && data.length) {
-        setDeliveryOrders(
-          data.map((o: any) => ({ ...o, id: o._id || o.id }))
-            .filter((o: any) => ['ready', 'picked_up', 'out_for_delivery', 'delivered'].includes(o.status))
-        );
-      }
-    }).catch(console.error);
+    fetchOrders();
 
     // 2. Real-time updates
     const socket = getSocket();
@@ -42,25 +52,23 @@ export default function DeliveryPage() {
 
       socket.on('delivery:order_ready', (alert: any) => {
         toast.info(`🛵 ${alert.message}`);
-        api.getOrders({ orderType: 'delivery' }).then((data) => {
-          if (data && data.length) {
-            setDeliveryOrders(
-              data.map((o: any) => ({ ...o, id: o._id || o.id }))
-                .filter((o: any) => ['ready', 'picked_up', 'out_for_delivery', 'delivered'].includes(o.status))
-            );
-          }
-        }).catch(console.error);
+        fetchOrders();
       });
 
       socket.on('order:updated', (updated: any) => {
         if (updated.orderType === 'delivery') {
           const mapped = { ...updated, id: updated._id || updated.id };
+          if (mapped.status === 'delivered') {
+            setDeliveryOrders((prev) => prev.filter((o) => o.id !== mapped.id));
+            setDeliveredTodayCount((prev) => prev + 1);
+            return;
+          }
           setDeliveryOrders((prev) => {
             const exists = prev.some((o) => o.id === mapped.id);
             if (exists) {
               return prev.map((o) => (o.id === mapped.id ? mapped : o));
             }
-            if (['ready', 'picked_up', 'out_for_delivery', 'delivered'].includes(mapped.status)) {
+            if (['ready', 'picked_up', 'out_for_delivery'].includes(mapped.status)) {
               return [mapped, ...prev];
             }
             return prev;
@@ -95,9 +103,9 @@ export default function DeliveryPage() {
       } else if (order.status === 'out_for_delivery') {
         await api.deliveryDelivered(orderId);
         toast.success(`Order ${order.orderNumber} marked as delivered`);
-        setDeliveryOrders((prev) =>
-          prev.map((o) => (o.id === orderId ? { ...o, status: 'delivered' as OrderStatus } : o))
-        );
+        // Remove from active delivery board and increment delivered today
+        setDeliveryOrders((prev) => prev.filter((o) => o.id !== orderId));
+        setDeliveredTodayCount((prev) => prev + 1);
       }
     } catch (err: any) {
       toast.error(err.message || 'Failed to advance delivery order');
@@ -107,7 +115,7 @@ export default function DeliveryPage() {
   const stats = {
     active: deliveryOrders.filter((o) => ['picked_up', 'out_for_delivery'].includes(o.status)).length,
     ready: deliveryOrders.filter((o) => o.status === 'ready').length,
-    delivered: deliveryOrders.filter((o) => o.status === 'delivered').length,
+    delivered: deliveredTodayCount,
   };
 
   return (
@@ -132,7 +140,7 @@ export default function DeliveryPage() {
         </CardContent></Card>
       </div>
 
-      <div className="grid grid-cols-1 gap-6 lg:grid-cols-4">
+      <div className="grid grid-cols-1 gap-6 lg:grid-cols-3">
         {deliveryColumns.map((col) => {
           const colOrders = deliveryOrders.filter((o) => o.status === col.key);
           return (
