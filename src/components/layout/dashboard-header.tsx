@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { Search, Bell, Menu as MenuIcon, LogOut, CheckCheck, Trash2, CheckCircle2 } from 'lucide-react';
+import { Search, Bell, Menu as MenuIcon, LogOut, CheckCheck, Trash2, CheckCircle2, User } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -19,7 +19,7 @@ import { getSocket } from '@/lib/socket';
 import { useCurrentUser } from '@/hooks/use-current-user';
 import type { Notification } from '@/lib/types';
 import Link from 'next/link';
-import { useRouter } from 'next/navigation';
+import { useRouter, usePathname } from 'next/navigation';
 
 interface DashboardHeaderProps {
   onMenuClick: () => void;
@@ -27,13 +27,23 @@ interface DashboardHeaderProps {
 
 export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
   const router = useRouter();
+  const pathname = usePathname();
   const [notifOpen, setNotifOpen] = useState(false);
   const [notifList, setNotifList] = useState<Notification[]>([]);
   const [isRinging, setIsRinging] = useState(false);
   const currentUser = useCurrentUser();
 
+  const profileHref =
+    currentUser?.role === 'delivery' || pathname?.startsWith('/dashboard/delivery')
+      ? '/dashboard/delivery/profile'
+      : currentUser?.role === 'cashier' || pathname?.startsWith('/dashboard/pos')
+      ? '/dashboard/pos/profile'
+      : currentUser?.role === 'kitchen' || pathname?.startsWith('/dashboard/kitchen')
+      ? '/dashboard/kitchen/profile'
+      : '/profile';
+
   useEffect(() => {
-    // Fetch live notifications
+    // Fetch live notifications (API already filters by role)
     const fetchNotifications = () => {
       api.getNotifications().then((data) => {
         if (Array.isArray(data)) {
@@ -44,10 +54,21 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
 
     fetchNotifications();
 
-    // Listen for live socket notifications & sync
+    const userRole = currentUser?.role || '';
+
+    // Listen for live socket notifications & filter by role
     const socket = getSocket();
     if (socket) {
       socket.on('notification', (newNotif: any) => {
+        // Client-side role filtering: only show notifications targeted to this user's role
+        const notifTargetRoles: string[] = newNotif.targetRoles || [];
+        const isAdmin = userRole === 'admin' || userRole === 'manager';
+        const isTargeted = notifTargetRoles.length === 0 || notifTargetRoles.includes(userRole);
+
+        if (!isAdmin && !isTargeted) {
+          return; // Skip notifications not meant for this role
+        }
+
         setNotifList((prev) => [
           {
             ...newNotif,
@@ -81,7 +102,7 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
         socket.off('notification:read_one');
       };
     }
-  }, []);
+  }, [currentUser?.role]);
 
   const handleMarkRead = async (id: string) => {
     // Optimistic local update
@@ -310,24 +331,11 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
               </div>
             </DropdownMenuLabel>
             <DropdownMenuSeparator />
-            <Link href="/">
-              <DropdownMenuItem className="cursor-pointer">
-                Back to Website
+            <Link href={profileHref}>
+              <DropdownMenuItem className="cursor-pointer gap-2">
+                <User className="h-4 w-4" /> Profile
               </DropdownMenuItem>
             </Link>
-            {currentUser?.role === 'customer' ? (
-              <Link href="/profile">
-                <DropdownMenuItem className="cursor-pointer">
-                  My Profile
-                </DropdownMenuItem>
-              </Link>
-            ) : (
-              <Link href="/dashboard/settings">
-                <DropdownMenuItem className="cursor-pointer">
-                  Settings
-                </DropdownMenuItem>
-              </Link>
-            )}
             <DropdownMenuSeparator />
             <DropdownMenuItem
               onClick={() => {

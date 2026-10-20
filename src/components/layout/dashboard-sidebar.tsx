@@ -66,6 +66,7 @@ const allNavItems: NavItem[] = [
     subItems: [
       { href: '/dashboard/pos', label: 'POS Terminal' },
       { href: '/dashboard/pos/transactions', label: 'Transaction History' },
+      { href: '/dashboard/pos/profile', label: 'Cashier Profile' },
     ],
   },
   {
@@ -78,6 +79,7 @@ const allNavItems: NavItem[] = [
       { href: '/dashboard/kitchen/served', label: 'Served to Table' },
       { href: '/dashboard/kitchen/takeaway', label: 'Takeaway Orders' },
       { href: '/dashboard/kitchen/delivery', label: 'Delivery Orders' },
+      { href: '/dashboard/kitchen/profile', label: 'Chef Profile' },
     ],
   },
   {
@@ -97,6 +99,10 @@ const allNavItems: NavItem[] = [
     label: 'Delivery',
     icon: Bike,
     roles: ['admin', 'manager', 'delivery'],
+    subItems: [
+      { href: '/dashboard/delivery', label: 'Delivery Board' },
+      { href: '/dashboard/delivery/history', label: 'Delivery History' },
+    ],
   },
   {
     href: '/dashboard/reservations',
@@ -185,10 +191,11 @@ export function DashboardSidebar({ open, onClose }: DashboardSidebarProps) {
     .substring(0, 2)
     .toUpperCase();
 
-  // Keep sub-items for POS & Kitchen expanded by default for instant access
+  // Keep sub-items for POS, Kitchen & Delivery expanded by default for instant access
   const [expandedMenus, setExpandedMenus] = useState<Record<string, boolean>>({
     '/dashboard/pos': true,
     '/dashboard/kitchen': true,
+    '/dashboard/delivery': true,
   });
 
   const toggleSubMenu = (e: React.MouseEvent, href: string) => {
@@ -321,28 +328,41 @@ export function DashboardSidebar({ open, onClose }: DashboardSidebarProps) {
         {/* User card */}
         <div className="border-t border-border p-4">
           <div className="flex items-center gap-3 rounded-lg bg-accent p-3">
-            <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground overflow-hidden border border-border">
-              {currentUser?.avatar ? (
-                <img
-                  src={currentUser.avatar}
-                  alt={displayName}
-                  className="h-full w-full object-cover"
-                  onError={(e) => {
-                    const target = e.currentTarget;
-                    target.style.display = 'none';
-                    if (target.parentElement) {
-                      target.parentElement.innerText = initials || 'U';
-                    }
-                  }}
-                />
-              ) : (
-                initials || 'U'
-              )}
-            </div>
-            <div className="min-w-0 flex-1">
-              <p className="truncate text-sm font-medium">{displayName}</p>
-              <p className="truncate text-xs text-muted-foreground">{currentUser?.email || ''}</p>
-            </div>
+            <Link
+              href={
+                role === 'delivery' || pathname?.startsWith('/dashboard/delivery')
+                  ? '/dashboard/delivery/profile'
+                  : role === 'cashier' || pathname?.startsWith('/dashboard/pos')
+                  ? '/dashboard/pos/profile'
+                  : role === 'kitchen' || pathname?.startsWith('/dashboard/kitchen')
+                  ? '/dashboard/kitchen/profile'
+                  : '/profile'
+              }
+              className="flex items-center gap-3 min-w-0 flex-1 hover:opacity-80 transition-opacity"
+            >
+              <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary text-sm font-semibold text-primary-foreground overflow-hidden border border-border">
+                {currentUser?.avatar ? (
+                  <img
+                    src={currentUser.avatar}
+                    alt={displayName}
+                    className="h-full w-full object-cover"
+                    onError={(e) => {
+                      const target = e.currentTarget;
+                      target.style.display = 'none';
+                      if (target.parentElement) {
+                        target.parentElement.innerText = initials || 'U';
+                      }
+                    }}
+                  />
+                ) : (
+                  initials || 'U'
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium">{displayName}</p>
+                <p className="truncate text-xs text-muted-foreground">{currentUser?.email || ''}</p>
+              </div>
+            </Link>
             <button
               onClick={handleLogout}
               title="Sign out"
