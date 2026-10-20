@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
-import { Search, Plus, Minus, Trash2, ShoppingCart, Receipt, CreditCard } from 'lucide-react';
+import { Search, Plus, Minus, Trash2, ShoppingCart, Receipt, CreditCard, User } from 'lucide-react';
 import type { MenuItem, MenuCategory } from '@/lib/types';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
@@ -260,6 +260,13 @@ export default function POSPage() {
           >
             <Receipt className="h-4 w-4 text-emerald-600 dark:text-emerald-400" />
             <span>Transaction History</span>
+          </Link>
+          <Link
+            href="/dashboard/pos/profile"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-medium text-foreground hover:bg-accent transition-colors shadow-xs"
+          >
+            <User className="h-4 w-4 text-blue-600 dark:text-blue-400" />
+            <span>Cashier Profile</span>
           </Link>
         </div>
       </div>

@@ -23,6 +23,7 @@ import {
   ArrowUpDown,
   UtensilsCrossed,
   LayoutGrid,
+  User,
 } from 'lucide-react';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
@@ -214,6 +215,13 @@ export default function POSTransactionHistoryPage() {
             <span className="ml-1 rounded-full bg-emerald-600/20 px-2 py-0.5 text-xs font-bold">
               {payments.length}
             </span>
+          </Link>
+          <Link
+            href="/dashboard/pos/profile"
+            className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground transition-all shadow-xs"
+          >
+            <User className="h-4 w-4 text-blue-500" />
+            <span>Cashier Profile</span>
           </Link>
         </div>
 

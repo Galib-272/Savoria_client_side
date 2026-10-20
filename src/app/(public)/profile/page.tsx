@@ -255,7 +255,7 @@ export default function ProfilePage() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
                             <p className="truncate text-sm font-semibold text-foreground group-hover:text-primary transition-colors">
-                              Order #{order.orderNumber || (order._id || order.id || '').slice(-6).toUpperCase()}
+                              Order {order.orderNumber ? (order.orderNumber.startsWith('#') ? order.orderNumber : `#${order.orderNumber}`) : `#${(order._id || order.id || '').slice(-6).toUpperCase()}`}
                             </p>
                             <span className="text-[10px] font-medium text-muted-foreground uppercase px-1.5 py-0.5 rounded bg-background border border-border">
                               {order.orderType || 'delivery'}
