@@ -21,6 +21,7 @@ export interface CurrentUser {
   role: UserRole;
   phone?: string;
   avatar?: string;
+  joinDate?: string;
 }
 
 /** Read the stored user from localStorage (client-side only). */

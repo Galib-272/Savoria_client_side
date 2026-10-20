@@ -87,6 +87,21 @@ export const api = {
     return apiRequest<any>('/auth/me');
   },
 
+  async updateProfile(data: { name?: string; phone?: string; avatar?: string; password?: string }) {
+    const res: any = await apiRequest('/auth/profile', {
+      method: 'PUT',
+      body: JSON.stringify(data),
+    });
+    if (res.user && typeof window !== 'undefined') {
+      const currentStored = localStorage.getItem('rms_user');
+      const parsed = currentStored ? JSON.parse(currentStored) : {};
+      const merged = { ...parsed, ...res.user };
+      localStorage.setItem('rms_user', JSON.stringify(merged));
+      window.dispatchEvent(new Event('storage'));
+    }
+    return res;
+  },
+
   logout() {
     if (typeof window !== 'undefined') {
       localStorage.removeItem('rms_token');

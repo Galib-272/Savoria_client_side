@@ -100,6 +100,7 @@ export interface Order {
   notes?: string;
   createdAt: string;
   updatedAt: string;
+  completedAt?: string;
   address?: string;
   timeline: { time: string; status: string; label: string }[];
 }
