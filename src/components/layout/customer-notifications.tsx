@@ -346,6 +346,12 @@ export function CustomerNotificationBell() {
                       });
                       if (notif.orderId) {
                         window.location.href = `/orders?orderId=${notif.orderId}`;
+                      } else if (
+                        notif.type === 'reservation' ||
+                        Boolean(notif.reservationId) ||
+                        notif.title?.toLowerCase().includes('reservation')
+                      ) {
+                        window.location.href = '/reservations';
                       }
                       setOpen(false);
                     }}

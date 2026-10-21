@@ -235,7 +235,26 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
                     onClick={() => {
                       handleMarkRead(notif.id);
                       setNotifOpen(false);
-                      if (notif.orderId) {
+                      const isReservation =
+                        notif.type === 'reservation' ||
+                        Boolean(notif.reservationId) ||
+                        notif.title?.toLowerCase().includes('reservation');
+
+                      if (isReservation) {
+                        if (currentUser?.role === 'customer') {
+                          router.push('/reservations');
+                        } else {
+                          router.push('/dashboard/reservations');
+                        }
+                      } else if (notif.type === 'table' && !notif.orderId) {
+                        router.push('/dashboard/tables');
+                      } else if (notif.type === 'kitchen' && (currentUser?.role === 'kitchen' || currentUser?.role === 'admin')) {
+                        router.push('/dashboard/kitchen');
+                      } else if (notif.type === 'delivery' && (currentUser?.role === 'delivery' || currentUser?.role === 'admin')) {
+                        router.push('/dashboard/delivery');
+                      } else if (notif.type === 'inventory' && (currentUser?.role === 'admin' || currentUser?.role === 'manager')) {
+                        router.push('/dashboard/inventory');
+                      } else if (notif.orderId) {
                         router.push(`/dashboard/orders?orderId=${notif.orderId}`);
                       } else {
                         router.push('/dashboard/orders');
