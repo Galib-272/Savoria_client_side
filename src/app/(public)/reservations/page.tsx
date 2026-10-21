@@ -120,9 +120,9 @@ export default function ReservationsPage() {
   const [selectedStatusFilter, setSelectedStatusFilter] = useState('all');
   const [tablesLoading, setTablesLoading] = useState(true);
 
-  // Selection state
-  const [selectedTableNumber, setSelectedTableNumber] = useState<number>(1);
-  const [selectedSeats, setSelectedSeats] = useState<string[]>(['S1']);
+  // Selection state (initially null - customer must pick)
+  const [selectedTableNumber, setSelectedTableNumber] = useState<number | null>(null);
+  const [selectedSeats, setSelectedSeats] = useState<string[]>([]);
 
   // Booking Form fields
   const [name, setName] = useState('');
@@ -264,13 +264,16 @@ export default function ReservationsPage() {
 
     // Toggling seats on current table
     if (selectedSeats.includes(seatNum)) {
-      if (selectedSeats.length === 1) {
-        toast.info('You must have at least one seat selected.');
-        return;
-      }
       const updated = selectedSeats.filter((s) => s !== seatNum);
-      setSelectedSeats(updated);
-      setGuests(String(updated.length));
+      if (updated.length === 0) {
+        // All seats deselected, unselect table
+        setSelectedTableNumber(null);
+        setSelectedSeats([]);
+        setGuests('1');
+      } else {
+        setSelectedSeats(updated);
+        setGuests(String(updated.length));
+      }
     } else {
       const updated = [...selectedSeats, seatNum].sort();
       setSelectedSeats(updated);
@@ -284,7 +287,14 @@ export default function ReservationsPage() {
       return;
     }
 
-    setSelectedTableNumber(table.number);
+    if (selectedTableNumber === table.number) {
+      // Clicking already selected table deselects it
+      setSelectedTableNumber(null);
+      setSelectedSeats([]);
+      setGuests('1');
+      return;
+    }
+
     const availableSeats = (table.seats || DEFAULT_SEATS)
       .filter((s) => s.status === 'available')
       .map((s) => s.seatNumber);
@@ -294,6 +304,7 @@ export default function ReservationsPage() {
       return;
     }
 
+    setSelectedTableNumber(table.number);
     setSelectedSeats(availableSeats);
     setGuests(String(availableSeats.length));
   };
@@ -539,7 +550,7 @@ export default function ReservationsPage() {
                                   onClick={() => handleToggleSeat(table.number, seat.seatNumber, seat.status)}
                                   disabled={!isAvailable && !isSeatSelected}
                                   className={cn(
-                                    'flex items-center justify-between px-2 py-1.5 rounded text-xs font-medium transition-all',
+                                    'flex items-center justify-between gap-1.5 px-2.5 py-1.5 rounded-md text-xs font-medium transition-all',
                                     isSeatSelected
                                       ? 'bg-primary text-primary-foreground shadow-sm ring-1 ring-primary'
                                       : seat.status === 'occupied'
@@ -550,14 +561,16 @@ export default function ReservationsPage() {
                                   )}
                                   title={`Seat ${seat.seatNumber}: ${seat.status}`}
                                 >
-                                  <span className="flex items-center gap-1">
+                                  <span className="flex items-center gap-1 font-semibold shrink-0">
                                     <Armchair className="h-3 w-3" />
                                     {seat.seatNumber}
                                   </span>
                                   {isSeatSelected ? (
-                                    <Check className="h-3 w-3" />
+                                    <span className="flex items-center gap-0.5 text-[10px] font-bold">
+                                      <Check className="h-3 w-3" />
+                                    </span>
                                   ) : (
-                                    <span className="text-[9px] capitalize">{seat.status}</span>
+                                    <span className="text-[9px] opacity-75 capitalize truncate">{seat.status}</span>
                                   )}
                                 </button>
                               );
@@ -620,7 +633,8 @@ export default function ReservationsPage() {
                     className="w-full text-xs font-semibold"
                     onClick={() => {
                       setSubmitted(false);
-                      setSelectedSeats(['S1']);
+                      setSelectedTableNumber(null);
+                      setSelectedSeats([]);
                     }}
                   >
                     Make Another Reservation
@@ -629,21 +643,43 @@ export default function ReservationsPage() {
               ) : (
                 <form onSubmit={handleSubmit} className="space-y-4">
                   {/* Selected Table / Seats Highlight Pill */}
-                  <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 flex items-center justify-between">
-                    <div>
-                      <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Selected Dining Spot</p>
-                      <p className="text-base font-bold text-foreground">
-                        Table T{selectedTableNumber} · {selectedSeats.length} Seat(s)
+                  {selectedTableNumber && selectedSeats.length > 0 ? (
+                    <div className="rounded-xl border border-primary/30 bg-primary/5 p-3 flex items-center justify-between">
+                      <div>
+                        <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">Selected Dining Spot</p>
+                        <p className="text-base font-bold text-foreground">
+                          Table T{selectedTableNumber} · {selectedSeats.length} Seat(s)
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">{selectedTableObj?.section || 'Main Dining'}</p>
+                      </div>
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        {selectedSeats.map((s) => (
+                          <span key={s} className="bg-primary text-primary-foreground text-xs font-bold px-2 py-0.5 rounded shadow-sm">
+                            {s}
+                          </span>
+                        ))}
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setSelectedTableNumber(null);
+                            setSelectedSeats([]);
+                          }}
+                          className="text-[11px] text-muted-foreground hover:text-destructive underline ml-1"
+                        >
+                          Clear
+                        </button>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="rounded-xl border-2 border-dashed border-border/80 bg-muted/20 p-4 text-center space-y-1">
+                      <p className="text-xs font-semibold text-foreground flex items-center justify-center gap-1.5">
+                        <Armchair className="h-4 w-4 text-primary" /> No Table Selected Yet
+                      </p>
+                      <p className="text-[11px] text-muted-foreground">
+                        Please click an available table on the floor map to pick your table and seats.
                       </p>
                     </div>
-                    <div className="flex gap-1">
-                      {selectedSeats.map((s) => (
-                        <span key={s} className="bg-primary text-primary-foreground text-xs font-bold px-2 py-0.5 rounded">
-                          {s}
-                        </span>
-                      ))}
-                    </div>
-                  </div>
+                  )}
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
@@ -748,16 +784,20 @@ export default function ReservationsPage() {
                   <Button
                     type="submit"
                     className="w-full h-10 font-bold text-sm shadow-md transition-all gap-2"
-                    disabled={submitting || !date || selectedSeats.length === 0}
+                    disabled={submitting || !date || !selectedTableNumber || selectedSeats.length === 0}
                   >
                     {submitting ? (
                       <>
                         <div className="h-4 w-4 animate-spin rounded-full border-2 border-primary-foreground border-t-transparent" />
                         Sending Request to Waiters...
                       </>
+                    ) : !selectedTableNumber || selectedSeats.length === 0 ? (
+                      <>
+                        <Armchair className="h-4 w-4" /> Pick a Table & Seat from Map to Book
+                      </>
                     ) : (
                       <>
-                        <CheckCircle2 className="h-4 w-4" /> Request Reservation
+                        <CheckCircle2 className="h-4 w-4" /> Request Reservation (Table T{selectedTableNumber} · {selectedSeats.length} {selectedSeats.length === 1 ? 'Seat' : 'Seats'})
                       </>
                     )}
                   </Button>
