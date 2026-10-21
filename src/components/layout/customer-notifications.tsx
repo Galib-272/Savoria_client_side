@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { getSocket } from '@/lib/socket';
 import { getStoredUser } from '@/lib/auth';
+import { api } from '@/lib/api';
 import { toast } from 'sonner';
 import {
   Bell,
@@ -68,7 +69,7 @@ export function CustomerNotificationBell() {
   const joinedRef = useRef(false);
 
   useEffect(() => {
-    // Hydrate from localStorage
+    // 1. Hydrate from localStorage
     try {
       const saved = localStorage.getItem(NOTIFS_STORAGE_KEY);
       if (saved) {
@@ -83,6 +84,32 @@ export function CustomerNotificationBell() {
     }
     setIsCustomer(true);
 
+    // 2. Fetch live notifications from backend API
+    const fetchLiveNotifications = async () => {
+      try {
+        const data = await api.getNotifications();
+        if (data && Array.isArray(data)) {
+          const mapped: CustomerNotification[] = data.map((n: any) => ({
+            id: n.id || n._id,
+            title: n.title,
+            message: n.message,
+            type: n.type || 'order',
+            orderId: n.orderId,
+            reservationId: n.reservationId,
+            time: n.time || 'Just now',
+            read: Boolean(n.read),
+          }));
+          setNotifications(mapped);
+          try {
+            localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(mapped));
+          } catch {}
+        }
+      } catch (err) {
+        console.error('Failed to fetch customer notifications:', err);
+      }
+    };
+    fetchLiveNotifications();
+
     const socket = getSocket();
     if (!socket) return;
 
@@ -96,34 +123,53 @@ export function CustomerNotificationBell() {
     }
     socket.on('connect', joinRooms);
 
-    // Listen for real-time notifications from kitchen state changes
+    // Listen for real-time notifications
     const handleNotification = (data: any) => {
       const notif: CustomerNotification = {
-        id: data.id || `notif-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-        title: data.title || 'Order Update',
+        id: data.id || data._id || `notif-${Date.now()}-${Math.random().toString(36).substring(7)}`,
+        title: data.title || 'Notification',
         message: data.message || '',
         type: data.type || 'order',
         orderId: data.orderId,
+        reservationId: data.reservationId,
         time: data.time || 'Just now',
         read: false,
       };
 
-      setNotifications((prev) => [notif, ...prev.slice(0, 19)]);
+      setNotifications((prev) => {
+        const filtered = prev.filter((n) => n.id !== notif.id);
+        const updated = [notif, ...filtered.slice(0, 29)];
+        try {
+          localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(updated));
+        } catch {}
+        return updated;
+      });
+
+      setIsRinging(true);
+      setTimeout(() => setIsRinging(false), 2000);
 
       const statusKey = extractStatus(data.title || data.message);
 
-      toast(data.title || 'Order Update', {
+      toast(data.title || 'Notification', {
         description: data.message,
-        duration: 6000,
+        duration: 7000,
         icon: getStatusEmoji(statusKey),
-        action: data.orderId
-          ? {
-              label: 'View Order',
-              onClick: () => {
-                window.location.href = `/orders?orderId=${data.orderId}`;
-              },
-            }
-          : undefined,
+        action:
+          data.reservationId || data.type === 'reservation' || data.title?.toLowerCase().includes('reservation')
+            ? {
+                label: 'View Reservation',
+                onClick: () => {
+                  window.location.href = '/reservations';
+                },
+              }
+            : data.orderId
+            ? {
+                label: 'View Order',
+                onClick: () => {
+                  window.location.href = `/orders?orderId=${data.orderId}`;
+                },
+              }
+            : undefined,
       });
     };
 
@@ -239,7 +285,7 @@ export function CustomerNotificationBell() {
 
   const unreadCount = notifications.filter((n) => !n.read).length;
 
-  const markAllRead = () => {
+  const markAllRead = async () => {
     setNotifications((prev) => {
       const updated = prev.map((n) => ({ ...n, read: true }));
       try {
@@ -247,14 +293,20 @@ export function CustomerNotificationBell() {
       } catch {}
       return updated;
     });
+    try {
+      await api.markAllNotificationsRead();
+    } catch {}
   };
 
-  const clearAll = () => {
+  const clearAll = async () => {
     setNotifications([]);
     try {
       localStorage.removeItem(NOTIFS_STORAGE_KEY);
     } catch {}
     setOpen(false);
+    try {
+      await api.clearAllNotifications();
+    } catch {}
   };
 
   if (!isCustomer) return null;
@@ -285,7 +337,7 @@ export function CustomerNotificationBell() {
           <div className="flex items-center justify-between border-b border-border bg-accent/50 px-4 py-3">
             <div className="flex items-center gap-2">
               <Bell className="h-4 w-4 text-primary" />
-              <span className="text-sm font-bold text-foreground">Order Notifications</span>
+              <span className="text-sm font-bold text-foreground">Notifications</span>
               {unreadCount > 0 ? (
                 <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-bold text-primary animate-badge-pop">
                   {unreadCount} new
@@ -324,7 +376,7 @@ export function CustomerNotificationBell() {
                 <Bell className="mx-auto mb-2 h-8 w-8 text-muted-foreground/30" />
                 <p className="text-sm font-medium text-muted-foreground">No notifications yet</p>
                 <p className="text-xs text-muted-foreground/70 mt-1">
-                  Order updates from the kitchen will appear here
+                  Order and reservation updates will appear here
                 </p>
               </div>
             ) : (
@@ -344,6 +396,10 @@ export function CustomerNotificationBell() {
                         } catch {}
                         return updated;
                       });
+                      try {
+                        api.markNotificationRead(notif.id);
+                      } catch {}
+
                       if (notif.orderId) {
                         window.location.href = `/orders?orderId=${notif.orderId}`;
                       } else if (
