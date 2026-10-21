@@ -20,6 +20,7 @@ import { useCurrentUser } from '@/hooks/use-current-user';
 import type { Notification } from '@/lib/types';
 import Link from 'next/link';
 import { useRouter, usePathname } from 'next/navigation';
+import { toast } from 'sonner';
 
 interface DashboardHeaderProps {
   onMenuClick: () => void;
@@ -81,6 +82,16 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
         // Trigger subtle bell animation
         setIsRinging(true);
         setTimeout(() => setIsRinging(false), 1500);
+
+        // Show live popup toast for staff
+        toast.info(newNotif.title, {
+          description: newNotif.message,
+          duration: 6000,
+          action: newNotif.type === 'reservation' ? {
+            label: 'View',
+            onClick: () => router.push('/dashboard/reservations'),
+          } : undefined,
+        });
       });
 
       socket.on('notification:read_all', () => {

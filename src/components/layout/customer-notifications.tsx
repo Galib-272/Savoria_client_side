@@ -15,6 +15,8 @@ import {
   X,
   Clock,
   CheckCheck,
+  Calendar,
+  XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -24,6 +26,7 @@ interface CustomerNotification {
   message: string;
   type: string;
   orderId?: string;
+  reservationId?: string;
   time: string;
   read: boolean;
 }
@@ -35,6 +38,9 @@ const STATUS_ICONS: Record<string, any> = {
   out_for_delivery: Bike,
   delivered: Home,
   completed: CheckCircle2,
+  confirmed: CheckCircle2,
+  declined: XCircle,
+  reservation: Calendar,
   default: Package,
 };
 
@@ -45,6 +51,9 @@ const STATUS_COLORS: Record<string, string> = {
   out_for_delivery: 'text-indigo-500 bg-indigo-500/10',
   delivered: 'text-green-600 bg-green-600/10',
   completed: 'text-emerald-600 bg-emerald-600/10',
+  confirmed: 'text-emerald-600 bg-emerald-600/10',
+  declined: 'text-rose-600 bg-rose-600/10',
+  reservation: 'text-purple-500 bg-purple-500/10',
   default: 'text-primary bg-primary/10',
 };
 
@@ -174,15 +183,46 @@ export function CustomerNotificationBell() {
       });
     };
 
+    // Listen for reservation status updates from waiter (accepted / declined)
+    const handleReservationStatusUpdate = (data: any) => {
+      if (!data) return;
+      const { reservation, notification } = data;
+      const isConfirmed = reservation?.status === 'confirmed';
+      const isCancelled = reservation?.status === 'cancelled';
+
+      const notifTitle =
+        notification?.title ||
+        (isConfirmed
+          ? '🎉 Reservation Accepted!'
+          : isCancelled
+          ? '❌ Reservation Declined'
+          : '📅 Reservation Update');
+
+      const notifMessage =
+        notification?.message ||
+        `Table T${reservation?.tableNumber || ''} reservation status: ${reservation?.status}`;
+
+      handleNotification({
+        id: notification?.id || `res-${Date.now()}`,
+        title: notifTitle,
+        message: notifMessage,
+        type: 'reservation',
+        reservationId: reservation?._id || reservation?.id,
+        time: 'Just now',
+      });
+    };
+
     socket.on('notification', handleNotification);
     socket.on('order:customer_update', handleCustomerUpdate);
     socket.on('order:updated', handleOrderUpdated);
+    socket.on('reservation:status_update', handleReservationStatusUpdate);
 
     return () => {
       socket.off('connect', joinRooms);
       socket.off('notification', handleNotification);
       socket.off('order:customer_update', handleCustomerUpdate);
       socket.off('order:updated', handleOrderUpdated);
+      socket.off('reservation:status_update', handleReservationStatusUpdate);
     };
   }, []);
 
@@ -357,6 +397,9 @@ export function CustomerNotificationBell() {
 // Helpers
 function extractStatus(text: string): string {
   const lower = text.toLowerCase();
+  if (lower.includes('accept') || lower.includes('confirmed')) return 'confirmed';
+  if (lower.includes('decline') || lower.includes('reject') || lower.includes('cancelled')) return 'declined';
+  if (lower.includes('reservation')) return 'reservation';
   if (lower.includes('prepar')) return 'preparing';
   if (lower.includes('ready') && !lower.includes('deliver')) return 'ready';
   if (lower.includes('served')) return 'served';
@@ -368,6 +411,12 @@ function extractStatus(text: string): string {
 
 function getStatusEmoji(status: string): string {
   switch (status) {
+    case 'confirmed':
+      return '🎉';
+    case 'declined':
+      return '❌';
+    case 'reservation':
+      return '📅';
     case 'preparing':
       return '👨‍🍳';
     case 'ready':

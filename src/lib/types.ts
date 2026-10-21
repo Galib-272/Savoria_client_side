@@ -135,14 +135,20 @@ export interface Table {
 
 export interface Reservation {
   id: string;
+  _id?: string;
   customerName: string;
   customerPhone: string;
+  customerEmail?: string;
+  customerId?: string;
   date: string;
   time: string;
   guests: number;
   tableNumber?: number;
+  seats?: string[];
   specialRequest?: string;
   status: ReservationStatus;
+  createdAt?: string;
+  updatedAt?: string;
 }
 
 export interface StaffMember {
@@ -226,13 +232,16 @@ export interface Review {
 
 export interface Notification {
   id: string;
+  _id?: string;
   title: string;
   message: string;
-  type: 'order' | 'kitchen' | 'table' | 'delivery' | 'inventory' | 'payment' | 'system';
+  type: 'order' | 'kitchen' | 'table' | 'delivery' | 'inventory' | 'payment' | 'system' | 'reservation';
   read: boolean;
   time: string;
   orderId?: string;
   tableNumber?: number;
+  reservationId?: string;
+  targetRoles?: string[];
 }
 
 export interface Offer {
