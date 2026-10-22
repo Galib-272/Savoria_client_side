@@ -9,7 +9,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Label } from '@/components/ui/label';
-import { Search, Plus, Edit, Ban, CheckCircle, UserCog } from 'lucide-react';
+import { Search, Plus, Ban, CheckCircle, Trash2 } from 'lucide-react';
+import { useCurrentUser } from '@/hooks/use-current-user';
 import type { StaffMember, StaffStatus } from '@/lib/types';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
@@ -46,14 +47,33 @@ export default function StaffPage() {
   const [newRole, setNewRole] = useState('waiter');
   const [newPassword, setNewPassword] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [deleteStaff, setDeleteStaff] = useState<StaffMember | null>(null);
+  const currentUser = useCurrentUser();
+  const isAdmin = currentUser?.role === 'admin';
+  const myId = currentUser?.id || currentUser?._id;
+  /** Managers may only manage front-of-house / kitchen / delivery staff (same rule as the server) */
+  const canManage = (staff: StaffMember) =>
+    staff.role !== 'admin' && staff.id !== myId && (isAdmin || ['cashier', 'kitchen', 'waiter', 'delivery'].includes(staff.role));
 
   useEffect(() => {
-    api.getStaff().then((staff) => {
-      if (staff && staff.length) {
-        setStaffList(staff.map((s: any) => ({ ...s, id: s._id || s.id })));
-      }
-    }).catch(console.error);
+    api
+      .getStaff()
+      .then((staff) => setStaffList((Array.isArray(staff) ? staff : []).map((s: any) => ({ ...s, id: s._id || s.id }))))
+      .catch((err) => toast.error(err.message || 'Failed to load staff'));
   }, []);
+
+  const handleDelete = async () => {
+    if (!deleteStaff) return;
+    try {
+      await api.deleteStaff(deleteStaff.id);
+      setStaffList((prev) => prev.filter((s) => s.id !== deleteStaff.id));
+      toast.success(`${deleteStaff.name} removed`);
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete staff member');
+    } finally {
+      setDeleteStaff(null);
+    }
+  };
 
   const handleAddStaff = async () => {
     if (!newName || !newEmail || !newPassword || !newRole) {
@@ -71,7 +91,7 @@ export default function StaffPage() {
         role: newRole,
       });
       toast.success('Staff member created successfully');
-      setStaffList((prev) => [res.data, ...prev]);
+      setStaffList((prev) => [{ ...res.data, id: res.data._id || res.data.id }, ...prev]);
       setAddOpen(false);
       setNewName('');
       setNewPhone('');
@@ -109,16 +129,23 @@ export default function StaffPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-2xl font-bold">Staff Management</h1>
-          <p className="text-sm text-muted-foreground">Manage employees, roles, and permissions (10 Waiters policy)</p>
+          <p className="text-sm text-muted-foreground">
+            Manage employees, roles, and permissions (10 Waiters policy)
+            {!isAdmin && ' — only the Main Admin can add or remove accounts'}
+          </p>
         </div>
-        <Button onClick={() => setAddOpen(true)}><Plus className="mr-2 h-4 w-4" /> Add Staff</Button>
+        {isAdmin && (
+          <Button onClick={() => setAddOpen(true)}>
+            <Plus className="mr-2 h-4 w-4" /> Add Staff
+          </Button>
+        )}
       </div>
 
-      <div className="grid grid-cols-2 gap-4 lg:grid-cols-5">
-        {['admin', 'manager', 'cashier', 'kitchen', 'waiter'].map((role) => (
+      <div className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-6">
+        {['admin', 'manager', 'cashier', 'kitchen', 'waiter', 'delivery'].map((role) => (
           <Card key={role}>
             <CardContent className="p-4">
               <p className="text-2xl font-bold capitalize">{staffList.filter((s) => s.role === role).length}</p>
@@ -162,9 +189,9 @@ export default function StaffPage() {
               <TableRow>
                 <TableHead>Staff Member</TableHead>
                 <TableHead>Role</TableHead>
-                <TableHead>Phone</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Joined</TableHead>
+                <TableHead className="hidden md:table-cell">Phone</TableHead>
+                <TableHead className="hidden sm:table-cell">Status</TableHead>
+                <TableHead className="hidden lg:table-cell">Joined</TableHead>
                 <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
@@ -176,9 +203,12 @@ export default function StaffPage() {
                       <div className="flex h-9 w-9 items-center justify-center rounded-full bg-primary/10 font-bold text-primary">
                         {staff.name.charAt(0)}
                       </div>
-                      <div>
+                      <div className="min-w-0">
                         <p className="font-medium">{staff.name}</p>
-                        <p className="text-xs text-muted-foreground">{staff.email}</p>
+                        <p className="truncate text-xs text-muted-foreground">{staff.email}</p>
+                        <Badge variant={statusConfig[staff.status]?.variant || 'default'} className="mt-1 sm:hidden">
+                          {statusConfig[staff.status]?.label || staff.status}
+                        </Badge>
                       </div>
                     </div>
                   </TableCell>
@@ -187,23 +217,30 @@ export default function StaffPage() {
                       {staff.role}
                     </span>
                   </TableCell>
-                  <TableCell className="text-sm">{staff.phone || 'N/A'}</TableCell>
-                  <TableCell>
+                  <TableCell className="hidden text-sm md:table-cell">{staff.phone || 'N/A'}</TableCell>
+                  <TableCell className="hidden sm:table-cell">
                     <Badge variant={statusConfig[staff.status]?.variant || 'default'}>
                       {statusConfig[staff.status]?.label || staff.status}
                     </Badge>
                   </TableCell>
-                  <TableCell className="text-sm">{staff.joinDate}</TableCell>
+                  <TableCell className="hidden text-sm lg:table-cell">{staff.joinDate}</TableCell>
                   <TableCell className="text-right">
                     <div className="flex justify-end gap-1">
-                      {staff.role !== 'admin' && (
+                      {canManage(staff) && (
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label={staff.status === 'suspended' ? 'Activate' : 'Suspend'}
+                          title={staff.status === 'suspended' ? 'Activate' : 'Suspend'}
                           className={staff.status === 'suspended' ? 'text-green-600' : 'text-destructive'}
                           onClick={() => setSuspendStaff(staff)}
                         >
                           {staff.status === 'suspended' ? <CheckCircle className="h-4 w-4" /> : <Ban className="h-4 w-4" />}
+                        </Button>
+                      )}
+                      {isAdmin && canManage(staff) && (
+                        <Button variant="ghost" size="icon" aria-label="Delete" title="Delete" className="text-destructive" onClick={() => setDeleteStaff(staff)}>
+                          <Trash2 className="h-4 w-4" />
                         </Button>
                       )}
                     </div>
@@ -235,6 +272,21 @@ export default function StaffPage() {
               >
                 {suspendStaff.status === 'suspended' ? 'Activate' : 'Suspend'}
               </Button>
+            </DialogFooter>
+          </DialogContent>
+        )}
+      </Dialog>
+
+      <Dialog open={!!deleteStaff} onOpenChange={(open) => !open && setDeleteStaff(null)}>
+        {deleteStaff && (
+          <DialogContent className="max-w-sm">
+            <DialogHeader>
+              <DialogTitle>Delete {deleteStaff.name}?</DialogTitle>
+              <DialogDescription>This permanently removes the account. Suspending is usually the better option.</DialogDescription>
+            </DialogHeader>
+            <DialogFooter className="gap-2 sm:gap-0">
+              <Button variant="outline" onClick={() => setDeleteStaff(null)}>Cancel</Button>
+              <Button variant="destructive" onClick={handleDelete}>Delete</Button>
             </DialogFooter>
           </DialogContent>
         )}

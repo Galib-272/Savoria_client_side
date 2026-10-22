@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState, useMemo, useRef } from 'react';
+import { Suspense, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Card, CardContent } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -9,15 +9,16 @@ import { Input } from '@/components/ui/input';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription } from '@/components/ui/dialog';
-import { Search, Eye, X, Utensils, CheckCircle2, Loader2, Bike, ShoppingBag } from 'lucide-react';
+import { Search, Eye, X, Utensils, CheckCircle2, Loader2, Bike, Banknote, Ban, PackageCheck } from 'lucide-react';
 import type { Order } from '@/lib/types';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
 import { useCurrentUser } from '@/hooks/use-current-user';
+import { cn } from '@/lib/utils';
 import { toast } from 'sonner';
 
 const formatCurrency = (amount: number) =>
-  new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', minimumFractionDigits: 0 }).format(amount);
+  new Intl.NumberFormat('en-BD', { style: 'currency', currency: 'BDT', minimumFractionDigits: 0 }).format(amount || 0);
 
 const statusColors: Record<string, string> = {
   new: 'bg-blue-100 text-blue-700 border-blue-200',
@@ -33,154 +34,216 @@ const statusColors: Record<string, string> = {
   cancelled: 'bg-red-100 text-red-700 border-red-200',
 };
 
-export default function OrdersPage() {
+const modifierText = (mods: any[] | undefined) =>
+  (mods || []).map((m) => (typeof m === 'string' ? m : m?.name)).filter(Boolean).join(', ');
+
+type ActionKey = 'claim' | 'serve' | 'complete' | 'handover' | 'pickup' | 'out' | 'delivered' | 'collect' | 'cancel';
+
+interface OrderAction {
+  key: ActionKey;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  className?: string;
+  variant?: 'default' | 'secondary' | 'outline' | 'destructive';
+}
+
+/** Which buttons a role sees for an order — mirrors the server's rules */
+function actionsFor(order: Order, role: string | undefined, userId: string | undefined): OrderAction[] {
+  if (!role) return [];
+  const actions: OrderAction[] = [];
+  const mgmt = role === 'admin' || role === 'manager';
+  const isWaiter = role === 'waiter' || mgmt;
+  const isRider = role === 'delivery' || mgmt;
+  const isCashier = role === 'cashier' || mgmt;
+  const ownsAsWaiter = !order.waiterId || order.waiterId === userId || mgmt;
+
+  if (order.orderType === 'dine-in') {
+    if (isWaiter && order.status === 'ready' && !order.waiterId && !order.waiterName)
+      actions.push({ key: 'claim', label: 'Take Order', icon: Utensils });
+    if (isWaiter && order.status === 'ready' && (order.waiterId || order.waiterName) && ownsAsWaiter)
+      actions.push({ key: 'serve', label: 'Mark Served', icon: CheckCircle2, className: 'bg-teal-600 hover:bg-teal-700 text-white' });
+    if ((isWaiter || isCashier) && order.status === 'served')
+      actions.push({ key: 'complete', label: order.paymentStatus === 'paid' ? 'Complete & Free Table' : 'Collect Cash & Complete', icon: PackageCheck, className: 'bg-emerald-600 hover:bg-emerald-700 text-white' });
+  }
+
+  if (order.orderType === 'takeaway' && isCashier && order.status === 'ready')
+    actions.push({ key: 'handover', label: order.paymentStatus === 'paid' ? 'Hand Over' : 'Collect Cash & Hand Over', icon: PackageCheck, className: 'bg-emerald-600 hover:bg-emerald-700 text-white' });
+
+  if (order.orderType === 'delivery' && isRider) {
+    if (order.status === 'ready') actions.push({ key: 'pickup', label: 'Pick Up', icon: Bike, className: 'bg-indigo-600 hover:bg-indigo-700 text-white' });
+    if (order.status === 'picked_up') actions.push({ key: 'out', label: 'Out for Delivery', icon: Bike, variant: 'secondary' });
+    if (['picked_up', 'out_for_delivery'].includes(order.status) && (role !== 'delivery' || !order.deliveryStaffId || order.deliveryStaffId === userId))
+      actions.push({ key: 'delivered', label: 'Delivered', icon: CheckCircle2, className: 'bg-emerald-600 hover:bg-emerald-700 text-white' });
+  }
+
+  if (isCashier && order.paymentStatus !== 'paid' && order.paymentStatus !== 'refunded' && !['cancelled', 'completed', 'delivered'].includes(order.status))
+    actions.push({ key: 'collect', label: 'Collect Payment', icon: Banknote, variant: 'outline' });
+
+  if (isCashier && ['new', 'confirmed', 'preparing', 'ready'].includes(order.status))
+    actions.push({ key: 'cancel', label: 'Cancel', icon: Ban, variant: 'outline', className: 'text-destructive border-destructive/40 hover:bg-destructive/10' });
+
+  return actions;
+}
+
+function OrdersPageInner() {
   const searchParams = useSearchParams();
-  const dashboardRouter = useRouter();
+  const router = useRouter();
   const requestedOrderId = searchParams.get('orderId');
-  // Track whether the initial orderId param has already been consumed so we don't re-open on re-renders
+  const initialSearch = searchParams.get('search') || '';
   const consumedOrderIdRef = useRef<string | null>(null);
 
-  const [orderList, setOrderList] = useState<Order[]>([]);
-  const [search, setSearch] = useState('');
+  const [orderList, setOrderList] = useState<Order[] | null>(null);
+  const [search, setSearch] = useState(initialSearch);
   const [statusFilter, setStatusFilter] = useState('all');
   const [typeFilter, setTypeFilter] = useState('all');
   const [selectedOrder, setSelectedOrder] = useState<Order | null>(null);
   const [actionLoadingId, setActionLoadingId] = useState<string | null>(null);
-
   const currentUser = useCurrentUser();
-  const isWaiter = currentUser?.role === 'waiter' || currentUser?.role === 'admin' || currentUser?.role === 'manager';
-  const isDelivery = currentUser?.role === 'delivery' || currentUser?.role === 'admin' || currentUser?.role === 'manager';
+  const role = currentUser?.role;
+  const userId = currentUser?.id || currentUser?._id;
+
+  useEffect(() => setSearch(initialSearch), [initialSearch]);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await api.getOrders({ limit: '500' });
+      const mapped = (Array.isArray(data) ? data : []).map((o: any) => ({ ...o, id: o._id || o.id }));
+      setOrderList(mapped);
+      if (requestedOrderId && consumedOrderIdRef.current !== requestedOrderId) {
+        const found = mapped.find(
+          (o: any) => o.id === requestedOrderId || o.orderNumber === requestedOrderId || o.orderNumber === `#${requestedOrderId}`
+        );
+        if (found) setSelectedOrder(found);
+        consumedOrderIdRef.current = requestedOrderId;
+        router.replace('/dashboard/orders', { scroll: false });
+      }
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to load orders');
+      setOrderList([]);
+    }
+  }, [requestedOrderId, router]);
 
   useEffect(() => {
-    api.getOrders().then((data) => {
-      if (data && data.length) {
-        const mapped = data.map((o: any) => ({ ...o, id: o._id || o.id }));
-        setOrderList(mapped);
-
-        // Only auto-select if we have an orderId param that hasn't been consumed yet
-        if (requestedOrderId && consumedOrderIdRef.current !== requestedOrderId) {
-          const found = mapped.find(
-            (o: any) =>
-              o.id === requestedOrderId ||
-              o._id === requestedOrderId ||
-              o.orderNumber === requestedOrderId ||
-              o.orderNumber === `#${requestedOrderId}`
-          );
-          if (found) {
-            setSelectedOrder(found);
-          }
-          // Mark as consumed & clear the URL param so refreshing doesn't re-open the modal
-          consumedOrderIdRef.current = requestedOrderId;
-          dashboardRouter.replace('/dashboard/orders', { scroll: false });
-        }
-      }
-    }).catch(console.error);
-
+    load();
     const socket = getSocket();
-    if (socket) {
-      const handleOrderUpdate = (updated: any) => {
-        const mapped = { ...updated, id: updated._id || updated.id };
-        setOrderList((prev) => {
-          const exists = prev.some((o) => o.id === mapped.id);
-          if (exists) {
-            return prev.map((o) => (o.id === mapped.id ? mapped : o));
-          }
-          return [mapped, ...prev];
-        });
-
-        setSelectedOrder((prev) => (prev && prev.id === mapped.id ? mapped : prev));
-      };
-
-      socket.on('order:updated', handleOrderUpdate);
-
-      // Listen for waiter ready alerts
-      socket.on('waiter:order_ready', (data: any) => {
-        toast.info(data.message || `Order ${data.orderNumber} is ready for serving!`);
+    if (!socket) return;
+    // Data refresh only — popups come from the notification bell
+    const handleOrderUpdate = (updated: any) => {
+      const mapped = { ...updated, id: updated._id || updated.id };
+      setOrderList((prev) => {
+        const list = prev || [];
+        return list.some((o) => o.id === mapped.id) ? list.map((o) => (o.id === mapped.id ? mapped : o)) : [mapped, ...list];
       });
+      setSelectedOrder((prev) => (prev && prev.id === mapped.id ? mapped : prev));
+    };
+    socket.on('order:updated', handleOrderUpdate);
+    socket.io.on('reconnect', load);
+    return () => {
+      socket.off('order:updated', handleOrderUpdate);
+      socket.io.off('reconnect', load);
+    };
+  }, [load]);
 
-      return () => {
-        socket.off('order:updated', handleOrderUpdate);
-        socket.off('waiter:order_ready');
-      };
-    }
-  }, [requestedOrderId, dashboardRouter]);
-
-  // Waiter action: Take Order (Claim Food)
-  const handleTakeOrder = async (order: Order, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    if (order.orderType === 'takeaway' || order.orderType === 'delivery') {
-      toast.error('Waiters can only take Dine-In orders.');
-      return;
-    }
+  const runAction = async (order: Order, key: ActionKey, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (key === 'cancel' && !window.confirm(`Cancel order ${order.orderNumber}?`)) return;
     setActionLoadingId(order.id);
     try {
-      await api.waiterClaimFood(order.id, currentUser?.name || 'Waiter');
-      toast.success(`You claimed Order ${order.orderNumber}! Status updated to Claimed.`);
+      let res: any;
+      switch (key) {
+        case 'claim':
+          res = await api.waiterClaimFood(order.id);
+          toast.success(`You took Order ${order.orderNumber}`);
+          break;
+        case 'serve':
+          res = await api.updateOrderStatus(order.id, 'served');
+          toast.success(`Order ${order.orderNumber} marked as served`);
+          break;
+        case 'complete':
+        case 'handover':
+          res = await api.updateOrderStatus(order.id, 'completed');
+          toast.success(`Order ${order.orderNumber} completed`);
+          break;
+        case 'pickup':
+          res = await api.deliveryPickup(order.id);
+          toast.success(`Order ${order.orderNumber} picked up`);
+          break;
+        case 'out':
+          res = await api.deliveryOut(order.id);
+          toast.success(`Order ${order.orderNumber} is out for delivery`);
+          break;
+        case 'delivered':
+          res = await api.deliveryDelivered(order.id);
+          toast.success(`Order ${order.orderNumber} delivered`);
+          break;
+        case 'collect':
+          res = await api.processPayment({ orderId: order.id, amount: order.total, paymentMethod: order.paymentMethod || 'cash' });
+          toast.success(`Payment received — ${res?.receiptNumber}`);
+          res = { data: res?.order };
+          break;
+        case 'cancel':
+          res = await api.updateOrderStatus(order.id, 'cancelled');
+          toast.success(`Order ${order.orderNumber} cancelled`);
+          break;
+      }
+      const updated = res?.data;
+      if (updated?._id) {
+        const mapped = { ...updated, id: updated._id };
+        setOrderList((prev) => (prev || []).map((o) => (o.id === mapped.id ? mapped : o)));
+        setSelectedOrder((prev) => (prev && prev.id === mapped.id ? mapped : prev));
+      }
     } catch (err: any) {
-      toast.error(err.message || 'Failed to claim order');
-    } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  // Waiter action: Mark Served
-  const handleMarkServed = async (order: Order, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    if (order.orderType === 'takeaway' || order.orderType === 'delivery') {
-      toast.error('Waiters can only serve Dine-In orders.');
-      return;
-    }
-    setActionLoadingId(order.id);
-    try {
-      await api.updateOrderStatus(order.id, 'served');
-      toast.success(`Order ${order.orderNumber} marked as Served!`);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to update order status');
-    } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  // Delivery action: Pick Up
-  const handleDeliveryPickup = async (order: Order, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setActionLoadingId(order.id);
-    try {
-      await api.deliveryPickup(order.id, currentUser?.name || 'Rider');
-      toast.success(`Order ${order.orderNumber} picked up!`);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to pick up order');
-    } finally {
-      setActionLoadingId(null);
-    }
-  };
-
-  // Delivery action: Mark Delivered
-  const handleDeliveryDelivered = async (order: Order, e?: React.MouseEvent) => {
-    if (e) e.stopPropagation();
-    setActionLoadingId(order.id);
-    try {
-      await api.deliveryDelivered(order.id);
-      toast.success(`Order ${order.orderNumber} marked as Delivered!`);
-    } catch (err: any) {
-      toast.error(err.message || 'Failed to mark delivered');
+      toast.error(err.message || 'Action failed');
+      load();
     } finally {
       setActionLoadingId(null);
     }
   };
 
   const filteredOrders = useMemo(() => {
-    let result = [...orderList];
-    if (search) {
-      result = result.filter((o) =>
-        o.orderNumber.toLowerCase().includes(search.toLowerCase()) ||
-        o.customerName.toLowerCase().includes(search.toLowerCase())
+    let result = [...(orderList || [])];
+    const q = search.trim().toLowerCase();
+    if (q) {
+      result = result.filter(
+        (o) =>
+          o.orderNumber.toLowerCase().includes(q) ||
+          o.customerName.toLowerCase().includes(q) ||
+          (o.customerPhone || '').toLowerCase().includes(q)
       );
     }
     if (statusFilter !== 'all') result = result.filter((o) => o.status === statusFilter);
     if (typeFilter !== 'all') result = result.filter((o) => o.orderType === typeFilter);
     return result;
   }, [orderList, search, statusFilter, typeFilter]);
+
+  const renderActions = (order: Order, size: 'sm' | 'default' = 'sm') => {
+    const actions = actionsFor(order, role, userId);
+    if (actions.length === 0) return <span className="text-xs text-muted-foreground">—</span>;
+    const loading = actionLoadingId === order.id;
+    return (
+      <div className="flex flex-wrap items-center justify-center gap-1.5">
+        {actions.map((a) => (
+          <Button
+            key={a.key}
+            size={size}
+            variant={a.variant || 'default'}
+            className={cn('h-8 gap-1.5 px-3 font-semibold', a.className)}
+            disabled={loading}
+            onClick={(e) => runAction(order, a.key, e)}
+          >
+            {loading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <a.icon className="h-3.5 w-3.5" />}
+            {a.label}
+          </Button>
+        ))}
+      </div>
+    );
+  };
+
+  const statusPill = (status: string) => (
+    <span className={`inline-block whitespace-nowrap rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize ${statusColors[status] || 'bg-gray-100 text-gray-700'}`}>
+      {status.replace(/_/g, ' ')}
+    </span>
+  );
 
   return (
     <div className="space-y-6">
@@ -190,43 +253,36 @@ export default function OrdersPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <div className="relative flex-1">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search by order number or customer..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-10"
-          />
+          <Input placeholder="Search by order number, customer or phone..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
           {search && (
-            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2">
+            <button onClick={() => setSearch('')} className="absolute right-3 top-1/2 -translate-y-1/2" aria-label="Clear search">
               <X className="h-4 w-4 text-muted-foreground" />
             </button>
           )}
         </div>
-
-        <div className="flex gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:flex">
           <Select value={statusFilter} onValueChange={setStatusFilter}>
-            <SelectTrigger className="w-[150px]">
+            <SelectTrigger className="sm:w-[160px]">
               <SelectValue placeholder="Status" />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="all">All Statuses</SelectItem>
               <SelectItem value="new">New</SelectItem>
-              <SelectItem value="confirmed">Confirmed</SelectItem>
               <SelectItem value="preparing">Preparing</SelectItem>
               <SelectItem value="ready">Ready</SelectItem>
               <SelectItem value="served">Served</SelectItem>
+              <SelectItem value="picked_up">Picked Up</SelectItem>
               <SelectItem value="out_for_delivery">Out for Delivery</SelectItem>
               <SelectItem value="delivered">Delivered</SelectItem>
               <SelectItem value="completed">Completed</SelectItem>
               <SelectItem value="cancelled">Cancelled</SelectItem>
             </SelectContent>
           </Select>
-
           <Select value={typeFilter} onValueChange={setTypeFilter}>
-            <SelectTrigger className="w-[140px]">
+            <SelectTrigger className="sm:w-[140px]">
               <SelectValue placeholder="Type" />
             </SelectTrigger>
             <SelectContent>
@@ -239,178 +295,90 @@ export default function OrdersPage() {
         </div>
       </div>
 
-      {/* Orders Table */}
-      <Card>
-        <CardContent className="p-0">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Order #</TableHead>
-                <TableHead>Customer</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead>Items</TableHead>
-                <TableHead>Payment</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-                <TableHead className="text-center">Workflow Action</TableHead>
-                <TableHead className="text-right">View</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {filteredOrders.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={9} className="py-12 text-center text-muted-foreground">
-                    No orders found matching your filters
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filteredOrders.map((order) => {
-                  const isLoading = actionLoadingId === order.id;
+      {orderList === null ? (
+        <div className="flex justify-center py-16">
+          <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+        </div>
+      ) : filteredOrders.length === 0 ? (
+        <Card>
+          <CardContent className="py-12 text-center text-muted-foreground">No orders found matching your filters</CardContent>
+        </Card>
+      ) : (
+        <>
+          {/* Phones: cards */}
+          <div className="space-y-3 md:hidden">
+            {filteredOrders.map((order) => (
+              <Card key={order.id} className="cursor-pointer" onClick={() => setSelectedOrder(order)}>
+                <CardContent className="space-y-3 p-4">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold">{order.orderNumber}</p>
+                      <p className="truncate text-sm text-muted-foreground">
+                        {order.customerName}
+                        {order.tableNumber ? ` · T${order.tableNumber}` : ''}
+                      </p>
+                    </div>
+                    {statusPill(order.status)}
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="capitalize text-muted-foreground">
+                      {order.orderType.replace('-', ' ')} · {order.items.length} item{order.items.length === 1 ? '' : 's'}
+                    </span>
+                    <span className="font-semibold">{formatCurrency(order.total)}</span>
+                  </div>
+                  <div className="flex items-center justify-between gap-2" onClick={(e) => e.stopPropagation()}>
+                    <Badge variant={order.paymentStatus === 'paid' ? 'default' : 'secondary'} className="capitalize">
+                      {order.paymentStatus}
+                    </Badge>
+                    {renderActions(order)}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
 
-                  return (
-                    <TableRow
-                      key={order.id}
-                      className="cursor-pointer hover:bg-accent/50"
-                      onClick={() => setSelectedOrder(order)}
-                    >
-                      <TableCell className="font-semibold text-foreground">
-                        {order.orderNumber}
-                      </TableCell>
+          {/* Tablets / desktop: table */}
+          <Card className="hidden md:block">
+            <CardContent className="overflow-x-auto p-0">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Order #</TableHead>
+                    <TableHead>Customer</TableHead>
+                    <TableHead>Type</TableHead>
+                    <TableHead className="hidden lg:table-cell">Items</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>Status</TableHead>
+                    <TableHead className="text-right">Total</TableHead>
+                    <TableHead className="text-center">Action</TableHead>
+                    <TableHead className="text-right">View</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredOrders.map((order) => (
+                    <TableRow key={order.id} className="cursor-pointer hover:bg-accent/50" onClick={() => setSelectedOrder(order)}>
+                      <TableCell className="whitespace-nowrap font-semibold text-foreground">{order.orderNumber}</TableCell>
                       <TableCell>
                         <p className="font-medium text-foreground">{order.customerName}</p>
-                        {order.tableNumber && (
-                          <p className="text-xs text-muted-foreground">Table #{order.tableNumber}</p>
-                        )}
+                        {order.tableNumber && <p className="text-xs text-muted-foreground">Table T{order.tableNumber}</p>}
                       </TableCell>
-                      <TableCell className="capitalize">{order.orderType.replace('-', ' ')}</TableCell>
-                      <TableCell>{order.items.length} items</TableCell>
+                      <TableCell className="whitespace-nowrap capitalize">{order.orderType.replace('-', ' ')}</TableCell>
+                      <TableCell className="hidden lg:table-cell">{order.items.length} items</TableCell>
                       <TableCell>
-                        <Badge
-                          variant={
-                            order.paymentStatus === 'paid'
-                              ? 'default'
-                              : order.paymentStatus === 'pending'
-                              ? 'secondary'
-                              : 'outline'
-                          }
-                          className="capitalize"
-                        >
+                        <Badge variant={order.paymentStatus === 'paid' ? 'default' : order.paymentStatus === 'pending' ? 'secondary' : 'outline'} className="capitalize">
                           {order.paymentStatus}
                         </Badge>
                       </TableCell>
-                      <TableCell>
-                        <span
-                          className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize ${
-                            statusColors[order.status] || 'bg-gray-100 text-gray-700'
-                          }`}
-                        >
-                          {order.status.replace(/_/g, ' ')}
-                        </span>
-                      </TableCell>
-                      <TableCell className="text-right font-medium">{formatCurrency(order.total)}</TableCell>
-
-                      {/* Workflow Actions Column */}
+                      <TableCell>{statusPill(order.status)}</TableCell>
+                      <TableCell className="whitespace-nowrap text-right font-medium">{formatCurrency(order.total)}</TableCell>
                       <TableCell className="text-center" onClick={(e) => e.stopPropagation()}>
-                        {/* Waiter: Ready Dine-In order not yet claimed -> Take Order button */}
-                        {isWaiter && (order.orderType === 'dine-in' || (!order.orderType && !!order.tableNumber)) && order.status === 'ready' && !order.waiterName && (
-                          <Button
-                            size="sm"
-                            className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold h-8 px-3 gap-1.5 shadow-sm"
-                            disabled={isLoading}
-                            onClick={(e) => handleTakeOrder(order, e)}
-                          >
-                            {isLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Utensils className="h-3.5 w-3.5" />
-                            )}
-                            Take Order
-                          </Button>
-                        )}
-
-                        {/* Waiter: Ready Dine-In order claimed by waiter -> Mark Served */}
-                        {isWaiter && (order.orderType === 'dine-in' || (!order.orderType && !!order.tableNumber)) && order.status === 'ready' && !!order.waiterName && (
-                          <Button
-                            size="sm"
-                            variant="secondary"
-                            className="h-8 px-3 gap-1.5 border border-teal-300 text-teal-800 bg-teal-50 hover:bg-teal-100"
-                            disabled={isLoading}
-                            onClick={(e) => handleMarkServed(order, e)}
-                          >
-                            {isLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" />
-                            )}
-                            Mark Served
-                          </Button>
-                        )}
-
-                        {/* Waiter: Dine-In order already served */}
-                        {isWaiter && (order.orderType === 'dine-in' || (!order.orderType && !!order.tableNumber)) && order.status === 'served' && (
-                          <span className="inline-flex items-center gap-1 text-xs font-medium text-teal-700 bg-teal-50 border border-teal-200 px-2.5 py-1 rounded-full">
-                            <CheckCircle2 className="h-3.5 w-3.5" /> Served
-                          </span>
-                        )}
-
-                        {/* Waiter panel: Takeaway orders cannot be taken by waiters */}
-                        {isWaiter && order.orderType === 'takeaway' && (
-                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/80 font-medium bg-muted/50 px-2.5 py-1 rounded-full border border-border/50">
-                            <ShoppingBag className="h-3.5 w-3.5 text-orange-500" /> Counter Takeaway
-                          </span>
-                        )}
-
-                        {/* Waiter panel: Delivery orders cannot be taken by waiters */}
-                        {isWaiter && order.orderType === 'delivery' && (
-                          <span className="inline-flex items-center gap-1 text-xs text-muted-foreground/80 font-medium bg-muted/50 px-2.5 py-1 rounded-full border border-border/50">
-                            <Bike className="h-3.5 w-3.5 text-indigo-500" /> Rider Delivery
-                          </span>
-                        )}
-
-                        {/* Delivery rider: Delivery ready -> Pick Up button */}
-                        {isDelivery && order.orderType === 'delivery' && order.status === 'ready' && (
-                          <Button
-                            size="sm"
-                            className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold h-8 px-3 gap-1.5 shadow-sm"
-                            disabled={isLoading}
-                            onClick={(e) => handleDeliveryPickup(order, e)}
-                          >
-                            {isLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <Bike className="h-3.5 w-3.5" />
-                            )}
-                            Pick Up
-                          </Button>
-                        )}
-
-                        {/* Delivery rider: Picked up -> Mark Delivered */}
-                        {isDelivery && order.orderType === 'delivery' && (order.status === 'picked_up' || order.status === 'out_for_delivery') && (
-                          <Button
-                            size="sm"
-                            className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold h-8 px-3 gap-1.5 shadow-sm"
-                            disabled={isLoading}
-                            onClick={(e) => handleDeliveryDelivered(order, e)}
-                          >
-                            {isLoading ? (
-                              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                            ) : (
-                              <CheckCircle2 className="h-3.5 w-3.5" />
-                            )}
-                            Delivered
-                          </Button>
-                        )}
-
-                        {/* Fallback when no workflow action is pending */}
-                        {!['ready', 'picked_up', 'out_for_delivery'].includes(order.status) && order.status !== 'served' && (
-                          <span className="text-xs text-muted-foreground">—</span>
-                        )}
+                        {renderActions(order)}
                       </TableCell>
-
                       <TableCell className="text-right">
                         <Button
                           variant="ghost"
                           size="icon"
+                          aria-label="View order"
                           onClick={(e) => {
                             e.stopPropagation();
                             setSelectedOrder(order);
@@ -420,121 +388,38 @@ export default function OrdersPage() {
                         </Button>
                       </TableCell>
                     </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
-        </CardContent>
-      </Card>
+                  ))}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
+        </>
+      )}
 
       {/* Order Detail Dialog */}
       <Dialog open={!!selectedOrder} onOpenChange={(open) => !open && setSelectedOrder(null)}>
         {selectedOrder && (
-          <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+          <DialogContent className="max-h-[90vh] w-[calc(100vw-2rem)] max-w-2xl overflow-y-auto">
             <DialogHeader>
-              <DialogTitle className="flex items-center gap-2">
+              <DialogTitle className="flex flex-wrap items-center gap-2">
                 Order {selectedOrder.orderNumber}
-                <span
-                  className={`inline-block rounded-full border px-2.5 py-0.5 text-xs font-semibold capitalize ${
-                    statusColors[selectedOrder.status]
-                  }`}
-                >
-                  {selectedOrder.status.replace(/_/g, ' ')}
-                </span>
+                {statusPill(selectedOrder.status)}
               </DialogTitle>
               <DialogDescription>
-                {selectedOrder.customerName} · {selectedOrder.orderType.replace('-', ' ')} ·{' '}
+                {selectedOrder.customerName} · <span className="capitalize">{selectedOrder.orderType.replace('-', ' ')}</span> ·{' '}
                 {new Date(selectedOrder.createdAt).toLocaleString()}
               </DialogDescription>
             </DialogHeader>
 
             <div className="space-y-4">
-              {/* Actions Header Bar for Waiter & Staff */}
-              <div className="flex flex-wrap items-center justify-between gap-2 p-3 bg-accent/40 rounded-lg border border-border">
-                <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                  Order Workflow Actions:
-                </span>
-                <div className="flex items-center gap-2">
-                  {/* Take Order action in dialog: ONLY for Dine-In when ready and not yet claimed */}
-                  {isWaiter &&
-                    selectedOrder.status === 'ready' &&
-                    (selectedOrder.orderType === 'dine-in' || (!selectedOrder.orderType && !!selectedOrder.tableNumber)) &&
-                    !selectedOrder.waiterName && (
-                      <Button
-                        size="sm"
-                        className="bg-primary hover:bg-primary/90 text-primary-foreground font-semibold gap-1.5"
-                        disabled={actionLoadingId === selectedOrder.id}
-                        onClick={() => handleTakeOrder(selectedOrder)}
-                      >
-                        <Utensils className="h-3.5 w-3.5" /> Take Order (Claim)
-                      </Button>
-                    )}
-
-                  {/* Mark Served in dialog: ONLY for Dine-In when ready and claimed by waiter */}
-                  {isWaiter &&
-                    selectedOrder.status === 'ready' &&
-                    (selectedOrder.orderType === 'dine-in' || (!selectedOrder.orderType && !!selectedOrder.tableNumber)) &&
-                    !!selectedOrder.waiterName && (
-                      <Button
-                        size="sm"
-                        className="bg-teal-600 hover:bg-teal-700 text-white font-semibold gap-1.5 shadow-sm"
-                        disabled={actionLoadingId === selectedOrder.id}
-                        onClick={() => handleMarkServed(selectedOrder)}
-                      >
-                        <CheckCircle2 className="h-3.5 w-3.5" /> Mark as Served
-                      </Button>
-                    )}
-
-                  {/* Note for Waiter on Takeaway order in dialog */}
-                  {isWaiter && selectedOrder.orderType === 'takeaway' && (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-orange-700 bg-orange-50 border border-orange-200 px-3 py-1.5 rounded-full">
-                      <ShoppingBag className="h-3.5 w-3.5" /> Takeaway (Handed over at front counter)
-                    </span>
-                  )}
-
-                  {/* Note for Waiter on Delivery order in dialog */}
-                  {isWaiter && selectedOrder.orderType === 'delivery' && (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-medium text-indigo-700 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-full">
-                      <Bike className="h-3.5 w-3.5" /> Delivery (Handled by delivery riders)
-                    </span>
-                  )}
-
-                  {/* Order already served */}
-                  {selectedOrder.status === 'served' && (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-teal-800 bg-teal-50 border border-teal-200 px-3 py-1.5 rounded-full">
-                      <CheckCircle2 className="h-3.5 w-3.5 text-teal-600" /> Food Served to Table
-                    </span>
-                  )}
-
-                  {/* Delivery Pick Up in dialog */}
-                  {selectedOrder.status === 'ready' && selectedOrder.orderType === 'delivery' && (
-                    <Button
-                      size="sm"
-                      className="bg-indigo-600 hover:bg-indigo-700 text-white font-semibold gap-1.5"
-                      disabled={actionLoadingId === selectedOrder.id}
-                      onClick={() => handleDeliveryPickup(selectedOrder)}
-                    >
-                      <Bike className="h-3.5 w-3.5" /> Pick Up for Delivery
-                    </Button>
-                  )}
-
-                  {/* Delivery Complete in dialog */}
-                  {(selectedOrder.status === 'picked_up' || selectedOrder.status === 'out_for_delivery') && selectedOrder.orderType === 'delivery' && (
-                    <Button
-                      size="sm"
-                      className="bg-emerald-600 hover:bg-emerald-700 text-white font-semibold gap-1.5"
-                      disabled={actionLoadingId === selectedOrder.id}
-                      onClick={() => handleDeliveryDelivered(selectedOrder)}
-                    >
-                      <CheckCircle2 className="h-3.5 w-3.5" /> Mark Delivered
-                    </Button>
-                  )}
+              {actionsFor(selectedOrder, role, userId).length > 0 && (
+                <div className="flex flex-col gap-2 rounded-lg border border-border bg-accent/40 p-3 sm:flex-row sm:items-center sm:justify-between">
+                  <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Actions</span>
+                  {renderActions(selectedOrder)}
                 </div>
-              </div>
+              )}
 
-              {/* Info */}
-              <div className="grid grid-cols-2 gap-4 rounded-lg border border-border p-4">
+              <div className="grid grid-cols-1 gap-4 rounded-lg border border-border p-4 sm:grid-cols-2">
                 <div>
                   <p className="text-xs text-muted-foreground">Customer</p>
                   <p className="text-sm font-medium">{selectedOrder.customerName}</p>
@@ -545,14 +430,23 @@ export default function OrdersPage() {
                 </div>
                 {selectedOrder.tableNumber && (
                   <div>
-                    <p className="text-xs text-muted-foreground">Table</p>
-                    <p className="text-sm font-medium">Table {selectedOrder.tableNumber}</p>
+                    <p className="text-xs text-muted-foreground">Table / Seats</p>
+                    <p className="text-sm font-medium">
+                      T{selectedOrder.tableNumber}
+                      {selectedOrder.seats?.length ? ` · ${selectedOrder.seats.join(', ')}` : ''}
+                    </p>
                   </div>
                 )}
+                <div>
+                  <p className="text-xs text-muted-foreground">Payment</p>
+                  <p className="text-sm font-medium capitalize">
+                    {selectedOrder.paymentStatus} · {(selectedOrder.paymentMethod || 'cash').replace('_', ' ')}
+                  </p>
+                </div>
                 {selectedOrder.waiterName && (
                   <div>
-                    <p className="text-xs text-muted-foreground">Assigned Waiter</p>
-                    <p className="text-sm font-medium text-primary font-semibold">{selectedOrder.waiterName}</p>
+                    <p className="text-xs text-muted-foreground">Waiter</p>
+                    <p className="text-sm font-semibold text-primary">{selectedOrder.waiterName}</p>
                   </div>
                 )}
                 {selectedOrder.kitchenStaffName && (
@@ -563,45 +457,49 @@ export default function OrdersPage() {
                 )}
                 {selectedOrder.deliveryStaffName && (
                   <div>
-                    <p className="text-xs text-muted-foreground">Delivery Staff</p>
+                    <p className="text-xs text-muted-foreground">Rider</p>
                     <p className="text-sm font-medium">{selectedOrder.deliveryStaffName}</p>
                   </div>
                 )}
                 {selectedOrder.address && (
-                  <div className="col-span-2">
+                  <div className="sm:col-span-2">
                     <p className="text-xs text-muted-foreground">Delivery Address</p>
                     <p className="text-sm font-medium">{selectedOrder.address}</p>
                   </div>
                 )}
               </div>
 
-              {/* Items */}
-              <div className="rounded-lg border border-border">
+              <div className="overflow-x-auto rounded-lg border border-border">
                 <Table>
                   <TableHeader>
                     <TableRow>
                       <TableHead>Item</TableHead>
-                      <TableHead>Modifiers</TableHead>
+                      <TableHead className="hidden sm:table-cell">Modifiers</TableHead>
                       <TableHead className="text-center">Qty</TableHead>
                       <TableHead className="text-right">Price</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {selectedOrder.items.map((item, i) => (
-                      <TableRow key={i}>
-                        <TableCell className="font-medium">{item.name}</TableCell>
-                        <TableCell className="text-xs text-muted-foreground">
-                          {item.modifiers?.join(', ') || '—'}
-                        </TableCell>
-                        <TableCell className="text-center">{item.quantity}</TableCell>
-                        <TableCell className="text-right">{formatCurrency(item.price * item.quantity)}</TableCell>
-                      </TableRow>
-                    ))}
+                    {selectedOrder.items.map((item: any, i: number) => {
+                      const modPrice = (item.modifiers || []).reduce((s: number, m: any) => s + (typeof m === 'object' ? m.price || 0 : 0), 0);
+                      return (
+                        <TableRow key={i}>
+                          <TableCell className="font-medium">
+                            {item.name}
+                            {modifierText(item.modifiers) && (
+                              <span className="block text-xs text-muted-foreground sm:hidden">{modifierText(item.modifiers)}</span>
+                            )}
+                          </TableCell>
+                          <TableCell className="hidden text-xs text-muted-foreground sm:table-cell">{modifierText(item.modifiers) || '—'}</TableCell>
+                          <TableCell className="text-center">{item.quantity}</TableCell>
+                          <TableCell className="whitespace-nowrap text-right">{formatCurrency((item.price + modPrice) * item.quantity)}</TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
 
-              {/* Totals */}
               <div className="space-y-2 rounded-lg border border-border p-4">
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Subtotal</span>
@@ -609,12 +507,12 @@ export default function OrdersPage() {
                 </div>
                 {selectedOrder.discount > 0 && (
                   <div className="flex justify-between text-sm text-success">
-                    <span>Discount</span>
+                    <span>Discount{(selectedOrder as any).couponCode ? ` (${(selectedOrder as any).couponCode})` : ''}</span>
                     <span>-{formatCurrency(selectedOrder.discount)}</span>
                   </div>
                 )}
                 <div className="flex justify-between text-sm">
-                  <span className="text-muted-foreground">Tax (10%)</span>
+                  <span className="text-muted-foreground">Tax</span>
                   <span>{formatCurrency(selectedOrder.tax)}</span>
                 </div>
                 {selectedOrder.deliveryFee > 0 && (
@@ -623,33 +521,31 @@ export default function OrdersPage() {
                     <span>{formatCurrency(selectedOrder.deliveryFee)}</span>
                   </div>
                 )}
-                <div className="border-t border-border pt-2 flex justify-between font-bold">
+                <div className="flex justify-between border-t border-border pt-2 font-bold">
                   <span>Total</span>
                   <span className="text-primary">{formatCurrency(selectedOrder.total)}</span>
                 </div>
               </div>
 
-              {/* Notes */}
               {selectedOrder.notes && (
                 <div className="rounded-lg border border-border p-4">
-                  <p className="text-xs text-muted-foreground mb-1">Special Instructions</p>
-                  <p className="text-sm italic">&quot;{selectedOrder.notes}&quot;</p>
+                  <p className="mb-1 text-xs text-muted-foreground">Special Instructions</p>
+                  <p className="whitespace-pre-line text-sm italic">{selectedOrder.notes}</p>
                 </div>
               )}
 
-              {/* Timeline */}
               <div className="rounded-lg border border-border p-4">
-                <p className="mb-3 text-sm font-semibold">Live Order Timeline</p>
+                <p className="mb-3 text-sm font-semibold">Order Timeline</p>
                 <div className="space-y-3">
                   {selectedOrder.timeline.map((event, i) => (
                     <div key={i} className="flex items-center gap-3">
                       <div
-                        className={`h-3 w-3 rounded-full ${
-                          i < selectedOrder.timeline.length - 1 ? 'bg-primary' : 'bg-primary animate-pulse ring-4 ring-primary/20'
+                        className={`h-3 w-3 shrink-0 rounded-full ${
+                          i < selectedOrder.timeline.length - 1 ? 'bg-primary' : 'animate-pulse bg-primary ring-4 ring-primary/20'
                         }`}
                       />
-                      <div className="flex-1">
-                        <p className="text-sm font-medium">{event.label}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="break-words text-sm font-medium">{event.label}</p>
                         <p className="text-xs text-muted-foreground">{event.time}</p>
                       </div>
                     </div>
@@ -661,5 +557,13 @@ export default function OrdersPage() {
         )}
       </Dialog>
     </div>
+  );
+}
+
+export default function OrdersPage() {
+  return (
+    <Suspense fallback={null}>
+      <OrdersPageInner />
+    </Suspense>
   );
 }

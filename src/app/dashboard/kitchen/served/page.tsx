@@ -22,7 +22,7 @@ export default function KitchenServedPage() {
 
   const loadOrders = async () => {
     try {
-      const data = await api.getOrders();
+      const data = await api.getOrders({ limit: '500' });
       if (data && Array.isArray(data)) {
         const mapped = data.map((o: any) => ({
           ...o,
@@ -30,7 +30,7 @@ export default function KitchenServedPage() {
         }));
 
         setCounts({
-          active: mapped.filter((o) => ['new', 'preparing', 'ready'].includes(o.status)).length,
+          active: mapped.filter((o) => ['new', 'confirmed', 'preparing', 'ready'].includes(o.status)).length,
           served: mapped.filter((o) => (o.status === 'served' || (o.status === 'completed' && o.orderType === 'dine-in'))).length,
           takeaway: mapped.filter((o) => o.orderType === 'takeaway' && ['ready', 'completed', 'served'].includes(o.status)).length,
           delivery: mapped.filter((o) => o.orderType === 'delivery' && ['picked_up', 'out_for_delivery', 'delivered', 'completed'].includes(o.status)).length,
@@ -51,17 +51,14 @@ export default function KitchenServedPage() {
     loadOrders();
 
     const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', 'kitchen');
-
-      socket.on('order:updated', (updated: any) => {
-        loadOrders();
-      });
-
-      return () => {
-        socket.off('order:updated');
-      };
-    }
+    if (!socket) return;
+    const refresh = () => loadOrders();
+    socket.on('order:updated', refresh);
+    socket.io.on('reconnect', refresh);
+    return () => {
+      socket.off('order:updated', refresh);
+      socket.io.off('reconnect', refresh);
+    };
   }, []);
 
   const getElapsed = (createdAt: string) => {

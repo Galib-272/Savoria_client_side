@@ -21,14 +21,27 @@ export default function ContactPage() {
     }).catch(console.error);
   }, []);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
+    const form = e.currentTarget;
+    const data = new FormData(form);
+    const phone = String(data.get('phone') || '').trim();
+    const message = String(data.get('message') || '').trim();
     setSubmitting(true);
-    setTimeout(() => {
+    try {
+      const res = await api.sendContactMessage({
+        name: String(data.get('name') || '').trim(),
+        email: String(data.get('email') || '').trim(),
+        subject: String(data.get('subject') || '').trim(),
+        message: phone ? `${message}\n\nPhone: ${phone}` : message,
+      });
+      toast.success(res?.message || 'Message sent! We will get back to you soon.');
+      form.reset();
+    } catch (err: any) {
+      toast.error(err.message || 'Could not send your message');
+    } finally {
       setSubmitting(false);
-      toast.success('Message sent! We will get back to you soon.');
-      (e.target as HTMLFormElement).reset();
-    }, 1000);
+    }
   };
 
   const contactInfo = [
@@ -79,24 +92,24 @@ export default function ContactPage() {
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label htmlFor="name">Name</Label>
-                <Input id="name" placeholder="Your name" required />
+                <Input id="name" name="name" placeholder="Your name" required />
               </div>
               <div className="space-y-2">
                 <Label htmlFor="email">Email</Label>
-                <Input id="email" type="email" placeholder="you@example.com" required />
+                <Input id="email" name="email" type="email" placeholder="you@example.com" required />
               </div>
             </div>
             <div className="space-y-2">
               <Label htmlFor="phone">Phone</Label>
-              <Input id="phone" placeholder="+880 1700-000000" />
+              <Input id="phone" name="phone" placeholder="+880 1700-000000" />
             </div>
             <div className="space-y-2">
               <Label htmlFor="subject">Subject</Label>
-              <Input id="subject" placeholder="How can we help?" required />
+              <Input id="subject" name="subject" placeholder="How can we help?" required />
             </div>
             <div className="space-y-2">
               <Label htmlFor="message">Message</Label>
-              <Textarea id="message" placeholder="Your message..." rows={5} required />
+              <Textarea id="message" name="message" placeholder="Your message..." rows={5} required />
             </div>
             <Button type="submit" className="w-full" disabled={submitting}>
               {submitting ? 'Sending...' : (

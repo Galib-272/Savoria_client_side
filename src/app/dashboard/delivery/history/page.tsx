@@ -26,6 +26,7 @@ import type { Order } from '@/lib/types';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
+import { useCurrentUser } from '@/hooks/use-current-user';
 import Link from 'next/link';
 
 const formatCurrency = (amount: number) =>
@@ -63,18 +64,25 @@ export default function DeliveryHistoryPage() {
   const [filterPeriod, setFilterPeriod] = useState<FilterPeriod>('all');
   const [expandedOrder, setExpandedOrder] = useState<string | null>(null);
 
+  const currentUser = useCurrentUser();
+  const myId = currentUser?.id || currentUser?._id;
+  const isRider = currentUser?.role === 'delivery';
+
   useEffect(() => {
+    if (!currentUser) return;
     const fetchDelivered = async () => {
       try {
-        const data = await api.getOrders({ orderType: 'delivery' });
-        if (data && data.length) {
-          setDeliveredOrders(
-            data
-              .map((o: any) => ({ ...o, id: o._id || o.id }))
-              .filter((o: any) => o.status === 'delivered')
-              .sort((a: any, b: any) => new Date(b.completedAt || b.updatedAt || b.createdAt).getTime() - new Date(a.completedAt || a.updatedAt || a.createdAt).getTime())
-          );
-        }
+        const data = await api.getOrders({ orderType: 'delivery', status: 'delivered,completed', limit: '500' });
+        setDeliveredOrders(
+          (Array.isArray(data) ? data : [])
+            .map((o: any) => ({ ...o, id: o._id || o.id }))
+            // a rider's history shows only the orders they delivered
+            .filter((o: any) => !isRider || o.deliveryStaffId === myId)
+            .sort(
+              (a: any, b: any) =>
+                new Date(b.completedAt || b.updatedAt || b.createdAt).getTime() - new Date(a.completedAt || a.updatedAt || a.createdAt).getTime()
+            )
+        );
       } catch (err) {
         console.error('Failed to fetch delivery history:', err);
       } finally {
@@ -83,28 +91,18 @@ export default function DeliveryHistoryPage() {
     };
 
     fetchDelivered();
-
-    // Real-time: when new orders are delivered, add to history
     const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', 'delivery');
-
-      socket.on('order:updated', (updated: any) => {
-        if (updated.orderType === 'delivery' && updated.status === 'delivered') {
-          const mapped = { ...updated, id: updated._id || updated.id };
-          setDeliveredOrders((prev) => {
-            const exists = prev.some((o) => o.id === mapped.id);
-            if (exists) return prev.map((o) => (o.id === mapped.id ? mapped : o));
-            return [mapped, ...prev];
-          });
-        }
-      });
-
-      return () => {
-        socket.off('order:updated');
-      };
-    }
-  }, []);
+    if (!socket) return;
+    const onOrder = (updated: any) => {
+      if (updated?.orderType === 'delivery' && ['delivered', 'completed'].includes(updated.status)) fetchDelivered();
+    };
+    socket.on('order:updated', onOrder);
+    socket.io.on('reconnect', fetchDelivered);
+    return () => {
+      socket.off('order:updated', onOrder);
+      socket.io.off('reconnect', fetchDelivered);
+    };
+  }, [currentUser, isRider, myId]);
 
   // Filter & search
   const filteredOrders = useMemo(() => {

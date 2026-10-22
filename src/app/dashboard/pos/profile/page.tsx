@@ -213,7 +213,7 @@ export default function CashierProfilePage() {
           </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link href="/dashboard/pos">
             <Button variant="outline" size="sm" className="gap-2">
               <ShoppingCart className="h-4 w-4" /> POS Terminal
@@ -293,48 +293,48 @@ export default function CashierProfilePage() {
       {/* KPI Stats Grid */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <Card className="hover:shadow-md transition-shadow">
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
+          <CardContent className="flex flex-col items-start gap-2 p-3 sm:flex-row sm:items-center sm:gap-3 sm:p-4">
+            <div className="flex h-10 w-10 shrink-0 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-blue-100 text-blue-600 dark:bg-blue-950 dark:text-blue-400">
               <Receipt className="h-6 w-6" />
             </div>
-            <div>
-              <p className="text-2xl font-bold">{todayPayments.length}</p>
-              <p className="text-xs text-muted-foreground">Today's Transactions</p>
+            <div className="min-w-0">
+              <p className="break-words text-xl font-bold sm:text-2xl">{todayPayments.length}</p>
+              <p className="text-xs text-muted-foreground">Today&apos;s Transactions</p>
             </div>
           </CardContent>
         </Card>
 
         <Card className="hover:shadow-md transition-shadow">
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400">
+          <CardContent className="flex flex-col items-start gap-2 p-3 sm:flex-row sm:items-center sm:gap-3 sm:p-4">
+            <div className="flex h-10 w-10 shrink-0 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-emerald-100 text-emerald-600 dark:bg-emerald-950 dark:text-emerald-400">
               <Banknote className="h-6 w-6" />
             </div>
-            <div>
-              <p className="text-2xl font-bold">{formatCurrency(todayCashTotal)}</p>
+            <div className="min-w-0">
+              <p className="break-words text-xl font-bold sm:text-2xl">{formatCurrency(todayCashTotal)}</p>
               <p className="text-xs text-muted-foreground">Cash In Register (Today)</p>
             </div>
           </CardContent>
         </Card>
 
         <Card className="hover:shadow-md transition-shadow">
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-950 dark:text-purple-400">
+          <CardContent className="flex flex-col items-start gap-2 p-3 sm:flex-row sm:items-center sm:gap-3 sm:p-4">
+            <div className="flex h-10 w-10 shrink-0 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-purple-100 text-purple-600 dark:bg-purple-950 dark:text-purple-400">
               <CreditCard className="h-6 w-6" />
             </div>
-            <div>
-              <p className="text-2xl font-bold">{formatCurrency(todayDigitalTotal)}</p>
+            <div className="min-w-0">
+              <p className="break-words text-xl font-bold sm:text-2xl">{formatCurrency(todayDigitalTotal)}</p>
               <p className="text-xs text-muted-foreground">Digital / Card / Mobile</p>
             </div>
           </CardContent>
         </Card>
 
         <Card className="hover:shadow-md transition-shadow">
-          <CardContent className="p-4 flex items-center gap-3">
-            <div className="flex h-12 w-12 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400">
+          <CardContent className="flex flex-col items-start gap-2 p-3 sm:flex-row sm:items-center sm:gap-3 sm:p-4">
+            <div className="flex h-10 w-10 shrink-0 sm:h-12 sm:w-12 items-center justify-center rounded-xl bg-amber-100 text-amber-600 dark:bg-amber-950 dark:text-amber-400">
               <TrendingUp className="h-6 w-6" />
             </div>
-            <div>
-              <p className="text-2xl font-bold">{formatCurrency(totalRevenueHandled)}</p>
+            <div className="min-w-0">
+              <p className="break-words text-xl font-bold sm:text-2xl">{formatCurrency(totalRevenueHandled)}</p>
               <p className="text-xs text-muted-foreground">Total Sales Handled</p>
             </div>
           </CardContent>

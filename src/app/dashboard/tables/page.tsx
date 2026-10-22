@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -67,21 +67,11 @@ export default function TablesPage() {
   const [bookingTime, setBookingTime] = useState('7:00 PM');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    const user = getStoredUser();
-    setCurrentUser(user);
-    if (user?.name) {
-      setCustomerBookingName(user.name);
-    }
-
-    // Default booking date to today
-    const today = new Date().toISOString().split('T')[0];
-    setBookingDate(today);
-
-    // 1. Fetch live tables from backend
-    api.getTables()
+  const loadTables = useCallback(() => {
+    api
+      .getTables()
       .then((data) => {
-        if (data && data.length) {
+        if (Array.isArray(data)) {
           setTables(
             data.map((t: any) => ({
               ...t,
@@ -92,29 +82,43 @@ export default function TablesPage() {
         }
       })
       .catch(console.error);
-
-    // 2. Real-time socket updates
-    const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', user?.role || 'customer');
-      socket.on('table:updated', (updatedTable: any) => {
-        setTables((prev) =>
-          prev.map((t) =>
-            t.id === (updatedTable._id || updatedTable.id) || t.number === updatedTable.number
-              ? {
-                  ...updatedTable,
-                  id: updatedTable._id || updatedTable.id,
-                  seats: updatedTable.seats && updatedTable.seats.length === 4 ? updatedTable.seats : DEFAULT_SEATS,
-                }
-              : t
-          )
-        );
-      });
-      return () => {
-        socket.off('table:updated');
-      };
-    }
   }, []);
+
+  useEffect(() => {
+    const user = getStoredUser();
+    setCurrentUser(user);
+    if (user?.name) {
+      setCustomerBookingName(user.name);
+    }
+
+    // Default booking date to today (local date, not UTC)
+    setBookingDate(new Intl.DateTimeFormat('en-CA').format(new Date()));
+
+    loadTables();
+
+    // 2. Real-time table updates (rooms are assigned by the server)
+    const socket = getSocket();
+    if (!socket) return;
+    const onTable = (updatedTable: any) => {
+      setTables((prev) =>
+        prev.map((t) =>
+          t.id === (updatedTable._id || updatedTable.id) || t.number === updatedTable.number
+            ? {
+                ...updatedTable,
+                id: updatedTable._id || updatedTable.id,
+                seats: updatedTable.seats && updatedTable.seats.length === 4 ? updatedTable.seats : DEFAULT_SEATS,
+              }
+            : t
+        )
+      );
+    };
+    socket.on('table:updated', onTable);
+    socket.io.on('reconnect', loadTables);
+    return () => {
+      socket.off('table:updated', onTable);
+      socket.io.off('reconnect', loadTables);
+    };
+  }, [loadTables]);
 
   const sections = Array.from(new Set(tables.map((t) => t.section)));
 
@@ -131,6 +135,7 @@ export default function TablesPage() {
       toast.success(`Table status updated to ${statusConfig[status].label}`);
     } catch (err: any) {
       toast.error(err.message || 'Failed to update table status');
+      loadTables();
     }
   };
 
@@ -188,6 +193,7 @@ export default function TablesPage() {
       setSelectedSeatDialog(null);
     } catch (err: any) {
       toast.error(err.message || 'Failed to update seat status');
+      loadTables(); // undo the optimistic change
     } finally {
       setIsSubmitting(false);
     }
@@ -231,6 +237,7 @@ export default function TablesPage() {
       setSelectedSeatDialog(null);
     } catch (err: any) {
       toast.error(err.message || 'Failed to update seat status');
+      loadTables(); // undo the optimistic change
     } finally {
       setIsSubmitting(false);
     }

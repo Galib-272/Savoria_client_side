@@ -30,7 +30,7 @@ export default function KitchenPage() {
 
   const loadAllOrders = async () => {
     try {
-      const data = await api.getOrders();
+      const data = await api.getOrders({ limit: '500' });
       if (data && Array.isArray(data)) {
         const mapped = data.map((o: any) => ({
           ...o,
@@ -38,14 +38,15 @@ export default function KitchenPage() {
         }));
 
         setCounts({
-          active: mapped.filter((o) => ['new', 'preparing', 'ready'].includes(o.status)).length,
+          active: mapped.filter((o) => ['new', 'confirmed', 'preparing', 'ready'].includes(o.status)).length,
           served: mapped.filter((o) => o.status === 'served' || (o.status === 'completed' && o.orderType === 'dine-in')).length,
           takeaway: mapped.filter((o) => o.orderType === 'takeaway' && ['ready', 'completed', 'served'].includes(o.status)).length,
           delivery: mapped.filter((o) => o.orderType === 'delivery' && ['picked_up', 'out_for_delivery', 'delivered', 'completed'].includes(o.status)).length,
         });
 
         // Kitchen active board only displays New, Preparing, and Ready (Served column removed)
-        const activeBoard = mapped.filter((o) => ['new', 'preparing', 'ready'].includes(o.status));
+        // 'confirmed' = older paid orders that haven't been started yet → shown in the New column
+        const activeBoard = mapped.filter((o) => ['new', 'confirmed', 'preparing', 'ready'].includes(o.status));
         setKitchenOrders(activeBoard);
       }
     } catch (err) {
@@ -56,36 +57,18 @@ export default function KitchenPage() {
   useEffect(() => {
     loadAllOrders();
 
+    // Data refresh only — popups come from the notification bell (no duplicates)
     const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', 'kitchen');
-
-      socket.on('kitchen:new_order', (newOrder: any) => {
-        toast.info(`🔔 New Kitchen Order ${newOrder.orderNumber}!`);
-        loadAllOrders();
-      });
-
-      socket.on('order:updated', () => {
-        loadAllOrders();
-      });
-
-      socket.on('order:waiter_claimed', ({ orderNumber, waiterName }: any) => {
-        toast.success(`🍽️ Order ${orderNumber} assigned to waiter ${waiterName}`);
-        loadAllOrders();
-      });
-
-      socket.on('order:delivery_claimed', ({ orderNumber, deliveryName }: any) => {
-        toast.success(`🛵 Order ${orderNumber} picked up by ${deliveryName}`);
-        loadAllOrders();
-      });
-
-      return () => {
-        socket.off('kitchen:new_order');
-        socket.off('order:updated');
-        socket.off('order:waiter_claimed');
-        socket.off('order:delivery_claimed');
-      };
-    }
+    if (!socket) return;
+    const refresh = () => loadAllOrders();
+    socket.on('order:updated', refresh);
+    socket.on('kitchen:new_order', refresh);
+    socket.io.on('reconnect', refresh);
+    return () => {
+      socket.off('order:updated', refresh);
+      socket.off('kitchen:new_order', refresh);
+      socket.io.off('reconnect', refresh);
+    };
   }, []);
 
   const handleStartPreparing = async (orderId: string) => {
@@ -142,7 +125,7 @@ export default function KitchenPage() {
       <KitchenSubNav counts={counts} />
 
       {/* Page Header */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h1 className="font-display text-2xl font-bold flex items-center gap-2">
             <ChefHat className="h-6 w-6 text-primary" />
@@ -154,15 +137,15 @@ export default function KitchenPage() {
           <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-1.5">
             <ChefHat className="h-4 w-4 text-primary" />
             <div>
-              <p className="text-[10px] text-muted-foreground">Avg Prep Time</p>
-              <p className="text-xs font-bold">14 min</p>
+              <p className="text-[10px] text-muted-foreground">Cooking now</p>
+              <p className="text-xs font-bold">{kitchenOrders.filter((o) => o.status === 'preparing').length} orders</p>
             </div>
           </div>
           <div className="flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-1.5">
             <Flame className="h-4 w-4 text-amber-500" />
             <div>
-              <p className="text-[10px] text-muted-foreground">In Kitchen</p>
-              <p className="text-xs font-bold">{kitchenOrders.length} active</p>
+              <p className="text-[10px] text-muted-foreground">Waiting to start</p>
+              <p className="text-xs font-bold">{kitchenOrders.filter((o) => ['new', 'confirmed'].includes(o.status)).length} orders</p>
             </div>
           </div>
         </div>
@@ -171,7 +154,9 @@ export default function KitchenPage() {
       {/* 3-Column Kanban Board: New, Preparing, Ready */}
       <div className="grid grid-cols-1 gap-6 md:grid-cols-3">
         {columns.map((col) => {
-          const colOrders = kitchenOrders.filter((o) => o.status === col.key);
+          const colOrders = kitchenOrders.filter((o) =>
+            col.key === 'new' ? ['new', 'confirmed'].includes(o.status) : o.status === col.key
+          );
           const Icon = col.icon;
           return (
             <div key={col.key} className="space-y-4">

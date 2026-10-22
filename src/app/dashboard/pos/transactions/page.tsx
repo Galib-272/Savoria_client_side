@@ -69,20 +69,18 @@ export default function POSTransactionHistoryPage() {
   useEffect(() => {
     fetchPayments();
 
+    // Live list refresh (the bell already announces payments — no extra popup here)
     const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', 'cashier');
-
-      // Real-time listener for incoming payments
-      socket.on('payment:created', (newPayment: any) => {
-        toast.success(`💵 New Transaction Received: ${newPayment.receiptNumber} (${formatCurrency(newPayment.amount)})`);
-        setPayments((prev) => [newPayment, ...prev]);
-      });
-
-      return () => {
-        socket.off('payment:created');
-      };
-    }
+    if (!socket) return;
+    const onPayment = (newPayment: any) => {
+      setPayments((prev) => (prev.some((p) => p._id === newPayment._id) ? prev : [newPayment, ...prev]));
+    };
+    socket.on('payment:created', onPayment);
+    socket.io.on('reconnect', fetchPayments);
+    return () => {
+      socket.off('payment:created', onPayment);
+      socket.io.off('reconnect', fetchPayments);
+    };
   }, []);
 
   const handleViewReceipt = async (payment: PaymentRecord) => {
@@ -198,7 +196,7 @@ export default function POSTransactionHistoryPage() {
     <div className="space-y-6">
       {/* Top POS Switcher Navigation */}
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-border pb-3">
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/dashboard/pos"
             className="inline-flex items-center gap-2 rounded-lg border border-border bg-card px-3.5 py-2 text-sm font-semibold text-muted-foreground hover:bg-accent hover:text-foreground transition-all shadow-xs"

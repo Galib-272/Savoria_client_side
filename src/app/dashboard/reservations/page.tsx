@@ -24,7 +24,6 @@ import type { Reservation, ReservationStatus } from '@/lib/types';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
 import { getSocket } from '@/lib/socket';
-import { getStoredUser } from '@/lib/auth';
 
 const statusConfig: Record<
   ReservationStatus,
@@ -45,7 +44,7 @@ export default function DashboardReservationsPage() {
   const fetchReservations = async () => {
     try {
       const data = await api.getReservations();
-      if (data) {
+      if (Array.isArray(data)) {
         setReservations(data.map((r: any) => ({ ...r, id: r._id || r.id })));
       }
     } catch (err: any) {
@@ -58,51 +57,36 @@ export default function DashboardReservationsPage() {
   useEffect(() => {
     fetchReservations();
 
-    const user = getStoredUser();
+    // Data refresh only — the bell in the header shows the popup for new requests
     const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', user?.role || 'waiter');
-      socket.emit('join_role_room', 'waiter');
-
-      // Listen for incoming reservation requests in real-time
-      const handleNewRequest = (data: any) => {
-        const { reservation, notification } = data || {};
-        if (reservation) {
-          const resObj = { ...reservation, id: reservation._id || reservation.id };
-          setReservations((prev) => [resObj, ...prev.filter((r) => r.id !== resObj.id)]);
-
-          toast.warning(`🔔 New Reservation Request!`, {
-            description: `${resObj.customerName} requested Table T${resObj.tableNumber} (${(resObj.seats || []).join(', ')}) on ${resObj.date} at ${resObj.time}`,
-            duration: 8000,
-          });
-        }
-      };
-
-      // Listen for reservation status updates
-      const handleStatusUpdate = (data: any) => {
-        const { reservation } = data || {};
-        if (reservation) {
-          const resObj = { ...reservation, id: reservation._id || reservation.id };
-          setReservations((prev) =>
-            prev.map((r) => (r.id === resObj.id ? { ...r, ...resObj } : r))
-          );
-        }
-      };
-
-      socket.on('reservation:new_request', handleNewRequest);
-      socket.on('reservation:status_update', handleStatusUpdate);
-
-      return () => {
-        socket.off('reservation:new_request', handleNewRequest);
-        socket.off('reservation:status_update', handleStatusUpdate);
-      };
-    }
+    if (!socket) return;
+    const handleNewRequest = (data: any) => {
+      const reservation = data?.reservation;
+      if (!reservation) return;
+      const resObj = { ...reservation, id: reservation._id || reservation.id };
+      setReservations((prev) => [resObj, ...prev.filter((r) => r.id !== resObj.id)]);
+    };
+    const handleStatusUpdate = (data: any) => {
+      const reservation = data?.reservation;
+      if (!reservation) return;
+      const resObj = { ...reservation, id: reservation._id || reservation.id };
+      setReservations((prev) => prev.map((r) => (r.id === resObj.id ? { ...r, ...resObj } : r)));
+    };
+    socket.on('reservation:new_request', handleNewRequest);
+    socket.on('reservation:status_update', handleStatusUpdate);
+    socket.io.on('reconnect', fetchReservations);
+    return () => {
+      socket.off('reservation:new_request', handleNewRequest);
+      socket.off('reservation:status_update', handleStatusUpdate);
+      socket.io.off('reconnect', fetchReservations);
+    };
   }, []);
 
   const pendingRequests = reservations.filter((r) => r.status === 'pending');
   const filtered = reservations.filter((r) => filterStatus === 'all' || r.status === filterStatus);
 
   const handleUpdateStatus = async (id: string, status: ReservationStatus, customerName?: string, tableNum?: number) => {
+    if (status === 'cancelled' && !window.confirm(`Decline / cancel the reservation for ${customerName}?`)) return;
     // Optimistic update
     setReservations((prev) => prev.map((r) => (r.id === id ? { ...r, status } : r)));
     try {
@@ -390,6 +374,14 @@ export default function DashboardReservationsPage() {
                                 onClick={() => handleUpdateStatus(res.id, 'completed', res.customerName, res.tableNumber)}
                               >
                                 Complete
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="h-8 text-xs px-2"
+                                onClick={() => handleUpdateStatus(res.id, 'no_show', res.customerName, res.tableNumber)}
+                              >
+                                No-show
                               </Button>
                               <Button
                                 size="sm"

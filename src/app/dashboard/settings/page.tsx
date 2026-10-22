@@ -5,53 +5,73 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
-import { Switch } from '@/components/ui/switch';
-import { Separator } from '@/components/ui/separator';
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { Save, UtensilsCrossed } from 'lucide-react';
+import { Textarea } from '@/components/ui/textarea';
+import { Save, UtensilsCrossed, Lock, Loader2 } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
+import { useCurrentUser } from '@/hooks/use-current-user';
+import { loadRestaurantSettings } from '@/hooks/use-restaurant-settings';
+
+const EMPTY = {
+  name: '',
+  tagline: '',
+  description: '',
+  phone: '',
+  email: '',
+  address: '',
+  hours: '',
+  currency: '৳',
+  logo: '',
+  taxRate: '10',
+  deliveryFee: '50',
+};
 
 export default function SettingsPage() {
-  const [info, setInfo] = useState({
-    name: 'Savoria Restaurant',
-    tagline: 'Fine Dining Experience',
-    description: '',
-    phone: '',
-    email: '',
-    address: '',
-    hours: '10:00 AM - 11:00 PM',
-  });
+  const currentUser = useCurrentUser();
+  const canEdit = currentUser?.role === 'admin';
+  const [info, setInfo] = useState(EMPTY);
+  const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    api.getSettings().then((data) => {
-      if (data) {
-        setInfo({
-          name: data.restaurantName || info.name,
-          tagline: data.tagline || info.tagline,
-          description: data.description || '',
-          phone: data.phone || '',
-          email: data.email || '',
-          address: data.address || '',
-          hours: data.openingHours || info.hours,
-        });
-      }
-    }).catch(console.error);
+    api
+      .getSettings()
+      .then((data) => {
+        if (data) {
+          setInfo({
+            name: data.name || '',
+            tagline: data.tagline || '',
+            description: data.description || '',
+            phone: data.phone || '',
+            email: data.email || '',
+            address: data.address || '',
+            hours: data.hours || '',
+            currency: data.currency || '৳',
+            logo: data.logo || '',
+            taxRate: String(data.taxRate ?? 10),
+            deliveryFee: String(data.deliveryFee ?? 50),
+          });
+        }
+      })
+      .catch((err) => toast.error(err.message || 'Failed to load settings'))
+      .finally(() => setLoading(false));
   }, []);
 
   const handleSave = async () => {
+    if (!info.name.trim()) {
+      toast.error('Restaurant name is required');
+      return;
+    }
+    const taxRate = Number(info.taxRate);
+    const deliveryFee = Number(info.deliveryFee);
+    if (!(taxRate >= 0 && taxRate <= 100) || !(deliveryFee >= 0)) {
+      toast.error('Tax must be 0–100% and the delivery fee 0 or more');
+      return;
+    }
     setSaving(true);
     try {
-      await api.updateSettings({
-        restaurantName: info.name,
-        tagline: info.tagline,
-        description: info.description,
-        phone: info.phone,
-        email: info.email,
-        address: info.address,
-        openingHours: info.hours,
-      });
+      await api.updateSettings({ ...info, name: info.name.trim(), taxRate, deliveryFee });
+      await loadRestaurantSettings(true); // refresh cached totals used by cart / POS
       toast.success('Settings saved successfully');
     } catch (err: any) {
       toast.error(err.message || 'Failed to save settings');
@@ -60,119 +80,97 @@ export default function SettingsPage() {
     }
   };
 
-  const updateField = (field: string, value: string) => setInfo((prev) => ({ ...prev, [field]: value }));
+  const field = (key: keyof typeof EMPTY, label: string, props: React.InputHTMLAttributes<HTMLInputElement> = {}) => (
+    <div className="space-y-2">
+      <Label htmlFor={`set-${key}`}>{label}</Label>
+      <Input id={`set-${key}`} value={info[key]} disabled={!canEdit} onChange={(e) => setInfo((p) => ({ ...p, [key]: e.target.value }))} {...props} />
+    </div>
+  );
+
+  if (loading) {
+    return (
+      <div className="flex justify-center py-20">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="font-display text-2xl font-bold">Restaurant Settings</h1>
-        <p className="text-sm text-muted-foreground">Configure your restaurant information and preferences</p>
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div>
+          <h1 className="font-display text-2xl font-bold">Restaurant Settings</h1>
+          <p className="text-sm text-muted-foreground">Restaurant information shown on the website, and the charges used for every order</p>
+        </div>
+        {canEdit && (
+          <Button onClick={handleSave} disabled={saving}>
+            <Save className="mr-2 h-4 w-4" />
+            {saving ? 'Saving...' : 'Save Changes'}
+          </Button>
+        )}
       </div>
 
-      <Tabs defaultValue="general">
-        <TabsList className="w-full justify-start overflow-x-auto">
-          <TabsTrigger value="general">General</TabsTrigger>
-          <TabsTrigger value="payment">Payment</TabsTrigger>
-          <TabsTrigger value="notifications">Notifications</TabsTrigger>
-          <TabsTrigger value="reservation">Reservations</TabsTrigger>
-        </TabsList>
+      {!canEdit && (
+        <div className="flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 dark:bg-amber-950/30 dark:text-amber-300">
+          <Lock className="h-4 w-4 shrink-0" /> Only the Main Admin can change restaurant settings. You can view them here.
+        </div>
+      )}
 
-        {/* General Settings */}
-        <TabsContent value="general" className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Restaurant Information</CardTitle><CardDescription>Basic details about your restaurant</CardDescription></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="flex items-center gap-4">
-                <div className="flex h-16 w-16 items-center justify-center rounded-xl bg-primary text-primary-foreground">
-                  <UtensilsCrossed className="h-8 w-8" />
-                </div>
-                <div>
-                  <Button variant="outline" size="sm" onClick={() => toast.info('Upload logo')}>Change Logo</Button>
-                  <p className="mt-1 text-xs text-muted-foreground">PNG or JPG, max 2MB</p>
-                </div>
-              </div>
-              <Separator />
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-2"><Label>Restaurant Name</Label><Input value={info.name} onChange={(e) => updateField('name', e.target.value)} /></div>
-                <div className="space-y-2"><Label>Tagline</Label><Input value={info.tagline} onChange={(e) => updateField('tagline', e.target.value)} /></div>
-              </div>
-              <div className="space-y-2"><Label>Description</Label><Input value={info.description} onChange={(e) => updateField('description', e.target.value)} /></div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-2"><Label>Phone</Label><Input value={info.phone} onChange={(e) => updateField('phone', e.target.value)} /></div>
-                <div className="space-y-2"><Label>Email</Label><Input value={info.email} onChange={(e) => updateField('email', e.target.value)} /></div>
-              </div>
-              <div className="space-y-2"><Label>Address</Label><Input value={info.address} onChange={(e) => updateField('address', e.target.value)} /></div>
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-2"><Label>Opening Hours</Label><Input value={info.hours} onChange={(e) => updateField('hours', e.target.value)} /></div>
-                <div className="space-y-2"><Label>Currency Symbol</Label><Input defaultValue="৳" /></div>
-              </div>
-            </CardContent>
-          </Card>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Restaurant Information</CardTitle>
+          <CardDescription>Shown in the website header, footer, About and Contact pages</CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <div className="flex items-center gap-4">
+            <div className="flex h-16 w-16 shrink-0 items-center justify-center overflow-hidden rounded-xl bg-primary text-primary-foreground">
+              {info.logo ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img src={info.logo} alt="Logo" className="h-full w-full object-cover" />
+              ) : (
+                <UtensilsCrossed className="h-8 w-8" />
+              )}
+            </div>
+            <div className="min-w-0 flex-1">{field('logo', 'Logo image URL (optional)', { placeholder: 'https://…' })}</div>
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {field('name', 'Restaurant Name')}
+            {field('tagline', 'Tagline')}
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="set-description">Description</Label>
+            <Textarea
+              id="set-description"
+              rows={3}
+              value={info.description}
+              disabled={!canEdit}
+              onChange={(e) => setInfo((p) => ({ ...p, description: e.target.value }))}
+            />
+          </div>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {field('phone', 'Phone')}
+            {field('email', 'Email', { type: 'email' })}
+          </div>
+          {field('address', 'Address')}
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {field('hours', 'Opening Hours')}
+            {field('currency', 'Currency Symbol')}
+          </div>
+        </CardContent>
+      </Card>
 
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Charges & Fees</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-                <div className="space-y-2"><Label>Tax Rate (%)</Label><Input type="number" defaultValue="10" /></div>
-                <div className="space-y-2"><Label>Service Charge (%)</Label><Input type="number" defaultValue="0" /></div>
-                <div className="space-y-2"><Label>Delivery Fee (৳)</Label><Input type="number" defaultValue="50" /></div>
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Payment Settings */}
-        <TabsContent value="payment" className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Payment Methods</CardTitle><CardDescription>Enable or disable payment options</CardDescription></CardHeader>
-            <CardContent className="space-y-4">
-              {['Cash', 'Card', 'Mobile Banking (bKash)', 'Mobile Banking (Nagad)', 'Bank Transfer'].map((method) => (
-                <div key={method} className="flex items-center justify-between rounded-lg border border-border p-3">
-                  <span className="text-sm font-medium">{method}</span>
-                  <Switch defaultChecked={method !== 'Bank Transfer'} />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Notification Settings */}
-        <TabsContent value="notifications" className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Notification Preferences</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              {['New order notifications', 'Kitchen order alerts', 'Low stock alerts', 'Daily sales summary', 'Reservation reminders', 'Delivery assignment alerts'].map((item) => (
-                <div key={item} className="flex items-center justify-between rounded-lg border border-border p-3">
-                  <span className="text-sm font-medium">{item}</span>
-                  <Switch defaultChecked />
-                </div>
-              ))}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Reservation Settings */}
-        <TabsContent value="reservation" className="space-y-4">
-          <Card>
-            <CardHeader><CardTitle className="text-lg">Reservation Settings</CardTitle></CardHeader>
-            <CardContent className="space-y-4">
-              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                <div className="space-y-2"><Label>Max Guests per Reservation</Label><Input type="number" defaultValue="8" /></div>
-                <div className="space-y-2"><Label>Time Slot Duration (min)</Label><Input type="number" defaultValue="90" /></div>
-              </div>
-              <div className="space-y-2"><Label>Advance Booking Limit (days)</Label><Input type="number" defaultValue="30" /></div>
-              <div className="flex items-center justify-between rounded-lg border border-border p-3">
-                <span className="text-sm font-medium">Auto-confirm reservations</span>
-                <Switch />
-              </div>
-            </CardContent>
-          </Card>
-        </TabsContent>
-      </Tabs>
-
-      <div className="flex justify-end">
-        <Button onClick={handleSave} disabled={saving}><Save className="mr-2 h-4 w-4" />{saving ? 'Saving...' : 'Save Changes'}</Button>
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-lg">Charges & Fees</CardTitle>
+          <CardDescription>Applied by the server to every new order (cart, checkout and POS show the same numbers)</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+            {field('taxRate', 'Tax Rate (%)', { type: 'number', min: 0, max: 100, step: 'any' })}
+            {field('deliveryFee', 'Delivery Fee (৳)', { type: 'number', min: 0, step: 'any' })}
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }

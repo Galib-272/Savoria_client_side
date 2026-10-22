@@ -57,7 +57,7 @@ export default function AboutPage() {
               that last a lifetime.
             </p>
             <p className="mt-4 text-muted-foreground">
-              Over the past decade, we have grown from a cozy neighborhood spot to one of Dhaka's most
+              Over the past decade, we have grown from a cozy neighborhood spot to one of Dhaka&apos;s most
               beloved dining destinations. Through it all, our commitment to quality, freshness, and
               exceptional service has never wavered.
             </p>

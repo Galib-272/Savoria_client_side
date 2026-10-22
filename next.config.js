@@ -1,7 +1,8 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   eslint: {
-    ignoreDuringBuilds: true,
+    // lint errors now fail the build instead of being silently ignored
+    ignoreDuringBuilds: false,
   },
   images: { unoptimized: true },
   experimental: {

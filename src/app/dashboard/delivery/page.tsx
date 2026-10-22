@@ -1,6 +1,7 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
+import { useCurrentUser } from '@/hooks/use-current-user';
 import { Card, CardContent } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
@@ -25,63 +26,55 @@ export default function DeliveryPage() {
   const [deliveryOrders, setDeliveryOrders] = useState<Order[]>([]);
   const [deliveredTodayCount, setDeliveredTodayCount] = useState<number>(0);
 
-  const fetchOrders = () => {
-    api.getOrders({ orderType: 'delivery' }).then((data) => {
-      if (data && data.length) {
-        const mapped = data.map((o: any) => ({ ...o, id: o._id || o.id }));
+  const currentUser = useCurrentUser();
+  const myId = currentUser?.id || currentUser?._id;
+  const isRider = currentUser?.role === 'delivery';
+
+  const fetchOrders = useCallback(() => {
+    api
+      .getOrders({ orderType: 'delivery', limit: '500' })
+      .then((data) => {
+        const mapped: any[] = (Array.isArray(data) ? data : []).map((o: any) => ({ ...o, id: o._id || o.id }));
         setDeliveryOrders(
-          mapped.filter((o: any) => ['ready', 'picked_up', 'out_for_delivery'].includes(o.status))
+          mapped.filter(
+            (o) =>
+              o.status === 'ready' ||
+              // riders only see their own picked-up orders; managers see everyone's
+              (['picked_up', 'out_for_delivery'].includes(o.status) && (!isRider || !o.deliveryStaffId || o.deliveryStaffId === myId))
+          )
         );
         const todayStr = new Date().toDateString();
-        const deliveredToday = mapped.filter(
-          (o: any) => o.status === 'delivered' && new Date(o.completedAt || o.updatedAt || o.createdAt).toDateString() === todayStr
-        ).length;
-        setDeliveredTodayCount(deliveredToday);
-      }
-    }).catch(console.error);
-  };
+        setDeliveredTodayCount(
+          mapped.filter(
+            (o) =>
+              o.status === 'delivered' &&
+              (!isRider || o.deliveryStaffId === myId) &&
+              new Date(o.completedAt || o.updatedAt || o.createdAt).toDateString() === todayStr
+          ).length
+        );
+      })
+      .catch(console.error);
+  }, [isRider, myId]);
 
   useEffect(() => {
-    // 1. Fetch live delivery orders
+    if (!currentUser) return;
     fetchOrders();
-
-    // 2. Real-time updates
+    // Data refresh only — the bell shows the "ready for pickup" popup
     const socket = getSocket();
-    if (socket) {
-      socket.emit('join_role_room', 'delivery');
-
-      socket.on('delivery:order_ready', (alert: any) => {
-        toast.info(`🛵 ${alert.message}`);
-        fetchOrders();
-      });
-
-      socket.on('order:updated', (updated: any) => {
-        if (updated.orderType === 'delivery') {
-          const mapped = { ...updated, id: updated._id || updated.id };
-          if (mapped.status === 'delivered') {
-            setDeliveryOrders((prev) => prev.filter((o) => o.id !== mapped.id));
-            setDeliveredTodayCount((prev) => prev + 1);
-            return;
-          }
-          setDeliveryOrders((prev) => {
-            const exists = prev.some((o) => o.id === mapped.id);
-            if (exists) {
-              return prev.map((o) => (o.id === mapped.id ? mapped : o));
-            }
-            if (['ready', 'picked_up', 'out_for_delivery'].includes(mapped.status)) {
-              return [mapped, ...prev];
-            }
-            return prev;
-          });
-        }
-      });
-
-      return () => {
-        socket.off('delivery:order_ready');
-        socket.off('order:updated');
-      };
-    }
-  }, []);
+    if (!socket) return;
+    const onOrder = (updated: any) => {
+      if (!updated || updated.orderType === 'delivery') fetchOrders();
+    };
+    const onReady = () => fetchOrders();
+    socket.on('order:updated', onOrder);
+    socket.on('delivery:order_ready', onReady);
+    socket.io.on('reconnect', onReady);
+    return () => {
+      socket.off('order:updated', onOrder);
+      socket.off('delivery:order_ready', onReady);
+      socket.io.off('reconnect', onReady);
+    };
+  }, [currentUser, fetchOrders]);
 
   const advanceDelivery = async (orderId: string) => {
     const order = deliveryOrders.find((o) => o.id === orderId);
@@ -103,12 +96,11 @@ export default function DeliveryPage() {
       } else if (order.status === 'out_for_delivery') {
         await api.deliveryDelivered(orderId);
         toast.success(`Order ${order.orderNumber} marked as delivered`);
-        // Remove from active delivery board and increment delivered today
-        setDeliveryOrders((prev) => prev.filter((o) => o.id !== orderId));
-        setDeliveredTodayCount((prev) => prev + 1);
       }
+      fetchOrders();
     } catch (err: any) {
       toast.error(err.message || 'Failed to advance delivery order');
+      fetchOrders();
     }
   };
 
