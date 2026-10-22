@@ -1,27 +1,28 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { getStoredUser, type CurrentUser } from '@/lib/auth';
+import { getStoredUser, AUTH_CHANGED_EVENT, type CurrentUser } from '@/lib/auth';
 
 /**
  * Returns the currently logged-in user from localStorage.
- * Re-reads whenever localStorage changes (cross-tab) or on initial mount.
+ * Updates on login / logout / profile changes in this tab and in other tabs.
  */
 export function useCurrentUser(): CurrentUser | null {
   const [user, setUser] = useState<CurrentUser | null>(null);
 
   useEffect(() => {
-    // Initial read
-    setUser(getStoredUser());
+    const refresh = () => setUser(getStoredUser());
+    refresh();
 
-    // Keep in sync if another tab logs in/out
     const onStorage = (e: StorageEvent) => {
-      if (e.key === 'rms_user') {
-        setUser(getStoredUser());
-      }
+      if (e.key === null || e.key === 'rms_user' || e.key === 'rms_token') refresh();
     };
     window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
+    window.addEventListener(AUTH_CHANGED_EVENT, refresh);
+    return () => {
+      window.removeEventListener('storage', onStorage);
+      window.removeEventListener(AUTH_CHANGED_EVENT, refresh);
+    };
   }, []);
 
   return user;

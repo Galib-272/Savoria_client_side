@@ -8,26 +8,31 @@ import { Label } from '@/components/ui/label';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card';
 import { ArrowLeft, Mail, CheckCircle2 } from 'lucide-react';
 import { toast } from 'sonner';
+import { api } from '@/lib/api';
 
 export default function ForgotPasswordPage() {
   const [email, setEmail] = useState('');
   const [sent, setSent] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setSubmitting(true);
-    setTimeout(() => {
-      setSubmitting(false);
+    try {
+      await api.forgotPassword(email.trim().toLowerCase());
       setSent(true);
-      toast.success('Password reset link sent to your email');
-    }, 1000);
+      toast.success('Request sent to the restaurant admin');
+    } catch (err: any) {
+      toast.error(err.message || 'Could not send the request');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center bg-gradient-to-br from-primary/5 via-background to-warning/5 px-4">
+    <div className="relative flex min-h-screen flex-col items-center justify-center bg-gradient-to-br from-primary/5 via-background to-warning/5 px-4 py-12">
       {/* Back to Home Button */}
-      <div className="absolute left-4 top-4 sm:left-8 sm:top-8">
+      <div className="mb-6 self-start sm:absolute sm:left-8 sm:top-8 sm:mb-0">
         <Link
           href="/"
           className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm hover:border-primary/40 hover:text-foreground transition-all"
@@ -43,7 +48,7 @@ export default function ForgotPasswordPage() {
           </div>
           <CardTitle className="font-display text-2xl">Forgot Password?</CardTitle>
           <CardDescription>
-            {sent ? 'Check your email for the reset link' : 'Enter your email and we\'ll send you a password reset link'}
+            {sent ? 'Your request has been sent' : 'Enter your account email and the restaurant admin will help you reset your password'}
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -53,8 +58,8 @@ export default function ForgotPasswordPage() {
                 <CheckCircle2 className="h-8 w-8" />
               </div>
               <p className="text-sm text-muted-foreground">
-                We've sent a password reset link to <span className="font-medium text-foreground">{email}</span>.
-                Please check your inbox and follow the instructions.
+                If an account exists for <span className="font-medium text-foreground">{email}</span>, the restaurant admin has been
+                notified and will contact you to reset your password. (Staff passwords are fixed by the restaurant.)
               </p>
               <Link href="/login" className="w-full">
                 <Button variant="outline" className="w-full">Back to Login</Button>
@@ -74,7 +79,7 @@ export default function ForgotPasswordPage() {
                 />
               </div>
               <Button type="submit" className="w-full" disabled={submitting}>
-                {submitting ? 'Sending...' : 'Send Reset Link'}
+                {submitting ? 'Sending...' : 'Request Password Reset'}
               </Button>
               <Link href="/login" className="flex items-center justify-center text-sm text-muted-foreground hover:text-primary">
                 <ArrowLeft className="mr-1 h-4 w-4" /> Back to Login

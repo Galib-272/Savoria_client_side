@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react';
 import { useRouter, usePathname } from 'next/navigation';
 import { DashboardSidebar } from '@/components/layout/dashboard-sidebar';
 import { DashboardHeader } from '@/components/layout/dashboard-header';
-import { getStoredUser, ROLE_HOME, canAccess, type UserRole } from '@/lib/auth';
+import { getStoredUser, ROLE_HOME, canAccess, AUTH_CHANGED_EVENT, type UserRole } from '@/lib/auth';
 
 export default function DashboardLayout({
   children,
@@ -21,7 +21,7 @@ export default function DashboardLayout({
 
     // Not logged in → redirect to login
     if (!user) {
-      router.replace('/login');
+      router.replace(`/login?redirect=${encodeURIComponent(pathname)}`);
       return;
     }
 
@@ -41,18 +41,21 @@ export default function DashboardLayout({
     }
 
     setAuthorized(true);
-
-    // Join role socket room so this staff user receives real-time role events and notifications
-    try {
-      const { getSocket } = require('@/lib/socket');
-      const socket = getSocket();
-      if (socket) {
-        socket.emit('join_role_room', role);
-      }
-    } catch (e) {
-      // socket init handled gracefully
-    }
+    // Real-time rooms are assigned by the server from the login token — nothing to join here.
   }, [pathname, router]);
+
+  // If the user signs out (here or in another tab) leave the dashboard immediately
+  useEffect(() => {
+    const onAuthChange = () => {
+      if (!getStoredUser()) router.replace('/login');
+    };
+    window.addEventListener(AUTH_CHANGED_EVENT, onAuthChange);
+    window.addEventListener('storage', onAuthChange);
+    return () => {
+      window.removeEventListener(AUTH_CHANGED_EVENT, onAuthChange);
+      window.removeEventListener('storage', onAuthChange);
+    };
+  }, [router]);
 
   if (!authorized) {
     // Render nothing while the redirect is in flight to prevent flash

@@ -21,9 +21,9 @@ import {
 } from 'lucide-react';
 import { useState, useEffect, useRef } from 'react';
 import { restaurantInfo as fallbackRestaurantInfo } from '@/lib/mock-data';
-import { getCart, clearCart } from '@/lib/cart';
+import { getCart } from '@/lib/cart';
 import { api } from '@/lib/api';
-import { getStoredUser, type CurrentUser } from '@/lib/auth';
+import { getStoredUser, AUTH_CHANGED_EVENT, type CurrentUser } from '@/lib/auth';
 import { CustomerNotificationBell } from './customer-notifications';
 
 const navLinks = [
@@ -81,11 +81,13 @@ export function PublicNavbar() {
 
     window.addEventListener('cart_updated', updateCount);
     window.addEventListener('storage', refreshUser);
-    window.addEventListener('auth_changed', refreshUser);
+    window.addEventListener(AUTH_CHANGED_EVENT, refreshUser);
+    window.addEventListener(AUTH_CHANGED_EVENT, updateCount);
     return () => {
       window.removeEventListener('cart_updated', updateCount);
       window.removeEventListener('storage', refreshUser);
-      window.removeEventListener('auth_changed', refreshUser);
+      window.removeEventListener(AUTH_CHANGED_EVENT, refreshUser);
+      window.removeEventListener(AUTH_CHANGED_EVENT, updateCount);
     };
   }, []);
 
@@ -104,8 +106,7 @@ export function PublicNavbar() {
   }, []);
 
   const handleLogout = () => {
-    api.logout();
-    clearCart();
+    api.logout(); // clears session, cart, cached notifications and the realtime connection
     setCurrentUser(null);
     setCartCount(0);
     setDropdownOpen(false);
@@ -128,13 +129,10 @@ export function PublicNavbar() {
   // First name for display
   const firstName = currentUser?.name?.split(' ')[0] ?? '';
 
-  // Hide Reservations link when not logged in
-  const visibleNavLinks = currentUser
-    ? navLinks
-    : navLinks.filter((link) => link.href !== '/reservations');
-
-  // Mobile bottom nav — hide Reservations when not logged in
-  const visibleMobileBottomNav = currentUser
+  // Reservations are for signed-in customers (guests sign in first, staff use the dashboard)
+  const isCustomerUser = currentUser?.role === 'customer';
+  const visibleNavLinks = isCustomerUser ? navLinks : navLinks.filter((link) => link.href !== '/reservations');
+  const visibleMobileBottomNav = isCustomerUser
     ? mobileBottomNav
     : mobileBottomNav.filter((link) => link.href !== '/reservations');
 
@@ -155,13 +153,13 @@ export function PublicNavbar() {
           </Link>
 
           {/* Desktop nav links — hidden on mobile */}
-          <nav className="hidden items-center gap-1 md:flex">
+          <nav className="hidden items-center gap-0.5 lg:flex xl:gap-1">
             {visibleNavLinks.map((link) => (
               <Link
                 key={link.href}
                 href={link.href}
                 className={cn(
-                  'rounded-md px-4 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-primary',
+                  'rounded-md px-3 py-2 text-sm font-medium transition-colors hover:bg-accent hover:text-primary xl:px-4',
                   pathname === link.href ? 'text-primary' : 'text-muted-foreground'
                 )}
               >
@@ -175,7 +173,8 @@ export function PublicNavbar() {
             {/* Customer Notification Bell — only shows for logged-in customers */}
             <CustomerNotificationBell />
 
-            {/* Cart — only show badge when logged in */}
+            {/* Cart — customers and guests only (staff order through the POS) */}
+            {!isStaff && (
             <Link
               href={currentUser ? '/cart' : '/login?redirect=/cart'}
               className="relative flex h-10 w-10 items-center justify-center rounded-full bg-accent text-foreground transition-colors hover:bg-secondary"
@@ -187,6 +186,7 @@ export function PublicNavbar() {
                 </span>
               )}
             </Link>
+            )}
 
             {/* ===== DESKTOP: Logged-in user dropdown ===== */}
             {currentUser ? (
@@ -415,7 +415,7 @@ export function PublicNavbar() {
 
       {/* ===== MOBILE BOTTOM NAVIGATION BAR ===== */}
       {/* Only visible on mobile screens (below md breakpoint) */}
-      <nav className="fixed bottom-0 left-0 right-0 z-50 md:hidden">
+      <nav className="fixed bottom-0 left-0 right-0 z-50 lg:hidden">
         {/* Glassmorphism background */}
         <div className="border-t border-border/60 bg-background/90 backdrop-blur-xl shadow-[0_-4px_20px_rgba(0,0,0,0.08)]">
           <div className="mx-auto flex h-[72px] max-w-lg items-end justify-around px-2 pb-2">

@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { Suspense, useEffect, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -11,15 +11,37 @@ import { UtensilsCrossed, Mail, Lock, ArrowRight, ArrowLeft } from 'lucide-react
 import { toast } from 'sonner';
 
 import { api } from '@/lib/api';
-import { ROLE_HOME, type UserRole } from '@/lib/auth';
+import { ROLE_HOME, getStoredUser, safeRedirect, type UserRole } from '@/lib/auth';
+import { GoogleSignInButton } from '@/components/auth/google-sign-in-button';
 
-export default function LoginPage() {
+function LoginForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const redirectParam = searchParams.get('redirect');
+  const redirectParam = safeRedirect(searchParams.get('redirect'));
+  const reason = searchParams.get('reason');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Already signed in → go straight to the right place
+  useEffect(() => {
+    const user = getStoredUser();
+    if (user) router.replace(redirectParam || ROLE_HOME[user.role] || '/');
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  useEffect(() => {
+    if (reason) toast.info(reason);
+  }, [reason]);
+
+  const goAfterLogin = (role: UserRole) => {
+    // Customers never land in the staff dashboard, staff land on their own panel
+    if (redirectParam && !(role === 'customer' && redirectParam.startsWith('/dashboard'))) {
+      router.replace(redirectParam);
+    } else {
+      router.replace(ROLE_HOME[role] ?? '/');
+    }
+  };
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -27,12 +49,7 @@ export default function LoginPage() {
     try {
       const res = await api.login({ email, password });
       toast.success('Welcome back!');
-      const role = (res?.user?.role ?? 'customer') as UserRole;
-      if (redirectParam && redirectParam.startsWith('/')) {
-        router.push(redirectParam);
-      } else {
-        router.push(ROLE_HOME[role] ?? '/');
-      }
+      goAfterLogin((res?.user?.role ?? 'customer') as UserRole);
     } catch (err: any) {
       toast.error(err.message || 'Login failed. Please check credentials.');
     } finally {
@@ -43,7 +60,7 @@ export default function LoginPage() {
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center bg-muted/20 px-4 py-12">
       {/* Back to Home Button */}
-      <div className="absolute left-4 top-4 sm:left-8 sm:top-8">
+      <div className="mb-6 self-start sm:absolute sm:left-8 sm:top-8 sm:mb-0">
         <Link
           href="/"
           className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm hover:border-primary/40 hover:text-foreground transition-all"
@@ -114,9 +131,13 @@ export default function LoginPage() {
               </Button>
             </form>
 
+            <div className="mt-4">
+              <GoogleSignInButton text="signin_with" onSignedIn={(u) => goAfterLogin((u?.role ?? 'customer') as UserRole)} />
+            </div>
+
             <p className="mt-6 text-center text-sm text-muted-foreground">
-              Don't have an account?{' '}
-              <Link href="/register" className="font-semibold text-primary hover:underline">
+              Don&apos;t have an account?{' '}
+              <Link href={redirectParam ? `/register?redirect=${encodeURIComponent(redirectParam)}` : '/register'} className="font-semibold text-primary hover:underline">
                 Sign up
               </Link>
             </p>
@@ -124,5 +145,13 @@ export default function LoginPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={null}>
+      <LoginForm />
+    </Suspense>
   );
 }

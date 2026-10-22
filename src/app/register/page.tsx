@@ -1,6 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { RedirectIfSignedIn } from '@/components/auth/require-role';
+
+import { Suspense, useState } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -10,9 +12,10 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { UtensilsCrossed, User, Mail, Lock, Phone, ArrowRight, ArrowLeft, ImageIcon, X } from 'lucide-react';
 import { toast } from 'sonner';
 import { api } from '@/lib/api';
-import { ROLE_HOME, type UserRole } from '@/lib/auth';
+import { ROLE_HOME, safeRedirect, type UserRole } from '@/lib/auth';
+import { GoogleSignInButton } from '@/components/auth/google-sign-in-button';
 
-export default function RegisterPage() {
+function RegisterForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const redirectParam = searchParams.get('redirect');
@@ -45,8 +48,9 @@ export default function RegisterPage() {
         avatar: avatarUrl.trim() || undefined,
       });
       toast.success('Account created successfully! Please log in to continue.');
-      if (redirectParam && redirectParam.startsWith('/')) {
-        router.push(`/login?redirect=${encodeURIComponent(redirectParam)}`);
+      const safe = safeRedirect(redirectParam);
+      if (safe) {
+        router.push(`/login?redirect=${encodeURIComponent(safe)}`);
       } else {
         router.push('/login');
       }
@@ -68,7 +72,7 @@ export default function RegisterPage() {
   return (
     <div className="relative flex min-h-screen flex-col items-center justify-center bg-muted/20 px-4 py-12">
       {/* Back to Home Button */}
-      <div className="absolute left-4 top-4 sm:left-8 sm:top-8">
+      <div className="mb-6 self-start sm:absolute sm:left-8 sm:top-8 sm:mb-0">
         <Link
           href="/"
           className="inline-flex items-center gap-2 rounded-full border border-border bg-card px-4 py-2 text-sm font-medium text-muted-foreground shadow-sm hover:border-primary/40 hover:text-foreground transition-all"
@@ -245,6 +249,16 @@ export default function RegisterPage() {
               </Button>
             </form>
 
+            <div className="mt-4">
+              <GoogleSignInButton
+                text="signup_with"
+                onSignedIn={(u) => {
+                  const safe = safeRedirect(redirectParam);
+                  router.replace(safe && !safe.startsWith('/dashboard') ? safe : ROLE_HOME[(u?.role ?? 'customer') as UserRole] || '/');
+                }}
+              />
+            </div>
+
             <p className="mt-6 text-center text-sm text-muted-foreground">
               Already have an account?{' '}
               <Link href="/login" className="font-semibold text-primary hover:underline">
@@ -255,5 +269,21 @@ export default function RegisterPage() {
         </Card>
       </div>
     </div>
+  );
+}
+
+function RegisterPageContent() {
+  return (
+    <Suspense fallback={null}>
+      <RegisterForm />
+    </Suspense>
+  );
+}
+
+export default function RegisterPage() {
+  return (
+    <RedirectIfSignedIn>
+      <RegisterPageContent />
+    </RedirectIfSignedIn>
   );
 }

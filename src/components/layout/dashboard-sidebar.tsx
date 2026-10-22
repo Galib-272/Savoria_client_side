@@ -209,7 +209,7 @@ export function DashboardSidebar({ open, onClose }: DashboardSidebarProps) {
 
   const handleLogout = () => {
     api.logout();
-    router.push('/login');
+    router.replace('/login');
   };
 
   return (
