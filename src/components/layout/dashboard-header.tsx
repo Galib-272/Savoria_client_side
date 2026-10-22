@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Search, Bell, Menu as MenuIcon, LogOut, CheckCheck, Trash2, CheckCircle2, User } from 'lucide-react';
 import { Input } from '@/components/ui/input';
 import { Button } from '@/components/ui/button';
@@ -15,12 +15,11 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
-import { getSocket } from '@/lib/socket';
 import { useCurrentUser } from '@/hooks/use-current-user';
-import type { Notification } from '@/lib/types';
+import { canAccess } from '@/lib/auth';
+import { useNotifications, formatNotificationTime } from '@/hooks/use-notifications';
 import Link from 'next/link';
-import { useRouter, usePathname } from 'next/navigation';
-import { toast } from 'sonner';
+import { useRouter } from 'next/navigation';
 
 interface DashboardHeaderProps {
   onMenuClick: () => void;
@@ -28,123 +27,42 @@ interface DashboardHeaderProps {
 
 export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
   const router = useRouter();
-  const pathname = usePathname();
   const [notifOpen, setNotifOpen] = useState(false);
-  const [notifList, setNotifList] = useState<Notification[]>([]);
-  const [isRinging, setIsRinging] = useState(false);
+  const [search, setSearch] = useState('');
   const currentUser = useCurrentUser();
+  const {
+    notifications: notifList,
+    unreadCount,
+    markRead: handleMarkRead,
+    markAllRead: handleMarkAllRead,
+    clearAll: handleClearAll,
+  } = useNotifications({
+    toastAction: (n) =>
+      n.type === 'reservation' ? { label: 'View', onClick: () => router.push('/dashboard/reservations') } : undefined,
+  });
+  const [isRinging, setIsRinging] = useState(false);
+  const previousUnread = useRef(0);
+
+  // subtle bell animation when a new notification arrives
+  useEffect(() => {
+    if (unreadCount > previousUnread.current) {
+      setIsRinging(true);
+      const t = window.setTimeout(() => setIsRinging(false), 1500);
+      previousUnread.current = unreadCount;
+      return () => window.clearTimeout(t);
+    }
+    previousUnread.current = unreadCount;
+  }, [unreadCount]);
 
   const profileHref =
-    currentUser?.role === 'delivery' || pathname?.startsWith('/dashboard/delivery')
+    currentUser?.role === 'delivery'
       ? '/dashboard/delivery/profile'
-      : currentUser?.role === 'cashier' || pathname?.startsWith('/dashboard/pos')
+      : currentUser?.role === 'cashier'
       ? '/dashboard/pos/profile'
-      : currentUser?.role === 'kitchen' || pathname?.startsWith('/dashboard/kitchen')
+      : currentUser?.role === 'kitchen'
       ? '/dashboard/kitchen/profile'
       : '/profile';
 
-  useEffect(() => {
-    // Fetch live notifications (API already filters by role)
-    const fetchNotifications = () => {
-      api.getNotifications().then((data) => {
-        if (Array.isArray(data)) {
-          setNotifList(data.map((n: any) => ({ ...n, id: n._id || n.id })));
-        }
-      }).catch(console.error);
-    };
-
-    fetchNotifications();
-
-    const userRole = currentUser?.role || '';
-
-    // Listen for live socket notifications & filter by role
-    const socket = getSocket();
-    if (socket) {
-      socket.on('notification', (newNotif: any) => {
-        // Client-side role filtering: only show notifications targeted to this user's role
-        const notifTargetRoles: string[] = newNotif.targetRoles || [];
-        const isAdmin = userRole === 'admin' || userRole === 'manager';
-        const isTargeted = notifTargetRoles.length === 0 || notifTargetRoles.includes(userRole);
-
-        if (!isAdmin && !isTargeted) {
-          return; // Skip notifications not meant for this role
-        }
-
-        setNotifList((prev) => [
-          {
-            ...newNotif,
-            id: newNotif._id || newNotif.id || String(Date.now()),
-            read: false,
-            time: 'Just now',
-          },
-          ...prev,
-        ]);
-        // Trigger subtle bell animation
-        setIsRinging(true);
-        setTimeout(() => setIsRinging(false), 1500);
-
-        // Show live popup toast for staff
-        toast.info(newNotif.title, {
-          description: newNotif.message,
-          duration: 6000,
-          action: newNotif.type === 'reservation' ? {
-            label: 'View',
-            onClick: () => router.push('/dashboard/reservations'),
-          } : undefined,
-        });
-      });
-
-      socket.on('notification:read_all', () => {
-        setNotifList((prev) => prev.map((n) => ({ ...n, read: true })));
-      });
-
-      socket.on('notification:cleared_all', () => {
-        setNotifList([]);
-      });
-
-      socket.on('notification:read_one', ({ id }: { id: string }) => {
-        setNotifList((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-      });
-
-      return () => {
-        socket.off('notification');
-        socket.off('notification:read_all');
-        socket.off('notification:cleared_all');
-        socket.off('notification:read_one');
-      };
-    }
-  }, [currentUser?.role]);
-
-  const handleMarkRead = async (id: string) => {
-    // Optimistic local update
-    setNotifList((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
-    try {
-      await api.markNotificationRead(id);
-    } catch {
-      // Keep optimistic
-    }
-  };
-
-  const handleMarkAllRead = async () => {
-    // Optimistic local update: all read immediately
-    setNotifList((prev) => prev.map((n) => ({ ...n, read: true })));
-    try {
-      await api.markAllNotificationsRead();
-    } catch {
-      // Keep optimistic
-    }
-  };
-
-  const handleClearAll = async () => {
-    setNotifList([]);
-    try {
-      await api.clearAllNotifications();
-    } catch {
-      // Keep optimistic
-    }
-  };
-
-  const unreadCount = notifList.filter((n) => !n.read).length;
   const displayName = currentUser?.name || 'Admin User';
   const displayRole = currentUser?.role ? currentUser.role.toUpperCase() : 'Owner Admin';
   const initials = displayName
@@ -163,8 +81,16 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
       <div className="relative flex-1 max-w-md">
         <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
         <Input
-          placeholder="Search orders, customers, menu..."
+          placeholder="Search orders by number, name or phone…"
           className="pl-10 bg-card"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' && search.trim() && currentUser && canAccess(currentUser.role, '/dashboard/orders')) {
+              router.push(`/dashboard/orders?search=${encodeURIComponent(search.trim())}`);
+            }
+          }}
+          aria-label="Search orders"
         />
       </div>
 
@@ -226,7 +152,7 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
                 <div className="py-12 text-center text-muted-foreground">
                   <Bell className="mx-auto mb-2 h-8 w-8 text-muted-foreground/30 animate-pulse" />
                   <p className="text-sm font-medium">No notifications yet</p>
-                  <p className="text-xs text-muted-foreground/70 mt-0.5">You're all caught up!</p>
+                  <p className="text-xs text-muted-foreground/70 mt-0.5">You&apos;re all caught up!</p>
                 </div>
               ) : (
                 notifList.map((notif) => (
@@ -270,7 +196,7 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
                         {notif.title}
                       </span>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <span className="text-[10px] text-muted-foreground/70">{notif.time || 'Just now'}</span>
+                        <span className="text-[10px] text-muted-foreground/70">{formatNotificationTime(notif)}</span>
                         {!notif.read && (
                           <span className="h-2 w-2 rounded-full bg-primary ring-2 ring-primary/20 shrink-0" />
                         )}
@@ -370,7 +296,7 @@ export function DashboardHeader({ onMenuClick }: DashboardHeaderProps) {
             <DropdownMenuItem
               onClick={() => {
                 api.logout();
-                window.location.href = '/login';
+                router.replace('/login');
               }}
               className="text-destructive cursor-pointer"
             >

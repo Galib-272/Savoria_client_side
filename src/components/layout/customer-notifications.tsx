@@ -1,10 +1,8 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
-import { getSocket } from '@/lib/socket';
-import { getStoredUser } from '@/lib/auth';
-import { api } from '@/lib/api';
-import { toast } from 'sonner';
+import { useRouter } from 'next/navigation';
+import { useNotifications, formatNotificationTime } from '@/hooks/use-notifications';
 import {
   Bell,
   ChefHat,
@@ -20,17 +18,6 @@ import {
   XCircle,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
-
-interface CustomerNotification {
-  id: string;
-  title: string;
-  message: string;
-  type: string;
-  orderId?: string;
-  reservationId?: string;
-  time: string;
-  read: boolean;
-}
 
 const STATUS_ICONS: Record<string, any> = {
   preparing: ChefHat,
@@ -58,219 +45,36 @@ const STATUS_COLORS: Record<string, string> = {
   default: 'text-primary bg-primary/10',
 };
 
-const NOTIFS_STORAGE_KEY = 'rms_customer_notifications';
-
 export function CustomerNotificationBell() {
-  const [notifications, setNotifications] = useState<CustomerNotification[]>([]);
+  const router = useRouter();
   const [open, setOpen] = useState(false);
-  const [isCustomer, setIsCustomer] = useState(false);
   const [isRinging, setIsRinging] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
-  const joinedRef = useRef(false);
+  const previousUnread = useRef(0);
+
+  const openTarget = (n: { orderId?: string; reservationId?: string; type?: string; title?: string }) => {
+    if (n.orderId) router.push(`/orders?orderId=${n.orderId}`);
+    else if (n.type === 'reservation' || n.reservationId) router.push('/reservations');
+  };
+
+  const { user, notifications, unreadCount, markRead, markAllRead, clearAll } = useNotifications({
+    toastAction: (n) =>
+      n.orderId
+        ? { label: 'View Order', onClick: () => openTarget(n) }
+        : n.type === 'reservation' || n.reservationId
+        ? { label: 'View Reservation', onClick: () => openTarget(n) }
+        : undefined,
+  });
 
   useEffect(() => {
-    // 1. Hydrate from localStorage
-    try {
-      const saved = localStorage.getItem(NOTIFS_STORAGE_KEY);
-      if (saved) {
-        setNotifications(JSON.parse(saved));
-      }
-    } catch {}
-
-    const user = getStoredUser();
-    if (!user) {
-      setIsCustomer(false);
-      return;
-    }
-    setIsCustomer(true);
-
-    // 2. Fetch live notifications from backend API
-    const fetchLiveNotifications = async () => {
-      try {
-        const data = await api.getNotifications();
-        if (data && Array.isArray(data)) {
-          const mapped: CustomerNotification[] = data.map((n: any) => ({
-            id: n.id || n._id,
-            title: n.title,
-            message: n.message,
-            type: n.type || 'order',
-            orderId: n.orderId,
-            reservationId: n.reservationId,
-            time: n.time || 'Just now',
-            read: Boolean(n.read),
-          }));
-          setNotifications(mapped);
-          try {
-            localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(mapped));
-          } catch {}
-        }
-      } catch (err) {
-        console.error('Failed to fetch customer notifications:', err);
-      }
-    };
-    fetchLiveNotifications();
-
-    const socket = getSocket();
-    if (!socket) return;
-
-    const joinRooms = () => {
-      socket.emit('join_role_room', 'customer');
-      if (user?.role) socket.emit('join_role_room', user.role);
-    };
-
-    if (socket.connected) {
-      joinRooms();
-    }
-    socket.on('connect', joinRooms);
-
-    // Listen for real-time notifications
-    const handleNotification = (data: any) => {
-      const notif: CustomerNotification = {
-        id: data.id || data._id || `notif-${Date.now()}-${Math.random().toString(36).substring(7)}`,
-        title: data.title || 'Notification',
-        message: data.message || '',
-        type: data.type || 'order',
-        orderId: data.orderId,
-        reservationId: data.reservationId,
-        time: data.time || 'Just now',
-        read: false,
-      };
-
-      setNotifications((prev) => {
-        const filtered = prev.filter((n) => n.id !== notif.id);
-        const updated = [notif, ...filtered.slice(0, 29)];
-        try {
-          localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(updated));
-        } catch {}
-        return updated;
-      });
-
+    if (unreadCount > previousUnread.current) {
       setIsRinging(true);
-      setTimeout(() => setIsRinging(false), 2000);
-
-      const statusKey = extractStatus(data.title || data.message);
-
-      toast(data.title || 'Notification', {
-        description: data.message,
-        duration: 7000,
-        icon: getStatusEmoji(statusKey),
-        action:
-          data.reservationId || data.type === 'reservation' || data.title?.toLowerCase().includes('reservation')
-            ? {
-                label: 'View Reservation',
-                onClick: () => {
-                  window.location.href = '/reservations';
-                },
-              }
-            : data.orderId
-            ? {
-                label: 'View Order',
-                onClick: () => {
-                  window.location.href = `/orders?orderId=${data.orderId}`;
-                },
-              }
-            : undefined,
-      });
-    };
-
-    // Listen for customer-specific order updates
-    const handleCustomerUpdate = (data: any) => {
-      const statusKey = data.status || extractStatus(data.title || data.message || '');
-      toast(data.title || `Order ${statusKey}`, {
-        description: data.message || `Your order status changed to ${statusKey}`,
-        duration: 5000,
-        icon: getStatusEmoji(statusKey),
-      });
-    };
-
-    // Listen for general order updates broadcasted from kitchen
-    const handleOrderUpdated = (order: any) => {
-      if (!order) return;
-      const status = order.status;
-      const orderNum =
-        order.orderNumber || (order._id || order.id || '').slice(-6).toUpperCase();
-
-      let title = 'Order Update';
-      let message = `Order #${orderNum} status is now ${status}`;
-
-      if (status === 'preparing') {
-        title = '🍳 Kitchen Started Preparing';
-        message = `Chef started preparing your Order #${orderNum}!`;
-      } else if (status === 'ready') {
-        title =
-          order.orderType === 'takeaway'
-            ? '🥡 Food Ready for Pickup!'
-            : '🍽️ Food Ready!';
-        message =
-          order.orderType === 'takeaway'
-            ? `Your takeaway Order #${orderNum} is ready! Please collect your food at the counter.`
-            : `Order #${orderNum} is hot & ready!`;
-      } else if (status === 'served') {
-        title = '🍽️ Food Served to Table';
-        message = `Order #${orderNum} has been served. Enjoy your meal!`;
-      } else if (status === 'completed') {
-        title = '✅ Order Handover Completed';
-        message = `Order #${orderNum} was picked up. Thank you!`;
-      } else if (status === 'out_for_delivery') {
-        title = '🛵 Order Out for Delivery';
-        message = `Rider has picked up Order #${orderNum} and is on the way!`;
-      } else if (status === 'delivered') {
-        title = '🏠 Order Delivered';
-        message = `Order #${orderNum} has been delivered. Enjoy!`;
-      }
-
-      handleNotification({
-        id: `update-${order._id || order.id}-${status}-${Date.now()}`,
-        title,
-        message,
-        type: 'order',
-        orderId: order._id || order.id,
-        time: 'Just now',
-      });
-    };
-
-    // Listen for reservation status updates from waiter (accepted / declined)
-    const handleReservationStatusUpdate = (data: any) => {
-      if (!data) return;
-      const { reservation, notification } = data;
-      const isConfirmed = reservation?.status === 'confirmed';
-      const isCancelled = reservation?.status === 'cancelled';
-
-      const notifTitle =
-        notification?.title ||
-        (isConfirmed
-          ? '🎉 Reservation Accepted!'
-          : isCancelled
-          ? '❌ Reservation Declined'
-          : '📅 Reservation Update');
-
-      const notifMessage =
-        notification?.message ||
-        `Table T${reservation?.tableNumber || ''} reservation status: ${reservation?.status}`;
-
-      handleNotification({
-        id: notification?.id || `res-${Date.now()}`,
-        title: notifTitle,
-        message: notifMessage,
-        type: 'reservation',
-        reservationId: reservation?._id || reservation?.id,
-        time: 'Just now',
-      });
-    };
-
-    socket.on('notification', handleNotification);
-    socket.on('order:customer_update', handleCustomerUpdate);
-    socket.on('order:updated', handleOrderUpdated);
-    socket.on('reservation:status_update', handleReservationStatusUpdate);
-
-    return () => {
-      socket.off('connect', joinRooms);
-      socket.off('notification', handleNotification);
-      socket.off('order:customer_update', handleCustomerUpdate);
-      socket.off('order:updated', handleOrderUpdated);
-      socket.off('reservation:status_update', handleReservationStatusUpdate);
-    };
-  }, []);
+      const t = window.setTimeout(() => setIsRinging(false), 2000);
+      previousUnread.current = unreadCount;
+      return () => window.clearTimeout(t);
+    }
+    previousUnread.current = unreadCount;
+  }, [unreadCount]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -283,33 +87,8 @@ export function CustomerNotificationBell() {
     return () => document.removeEventListener('mousedown', handler);
   }, []);
 
-  const unreadCount = notifications.filter((n) => !n.read).length;
-
-  const markAllRead = async () => {
-    setNotifications((prev) => {
-      const updated = prev.map((n) => ({ ...n, read: true }));
-      try {
-        localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(updated));
-      } catch {}
-      return updated;
-    });
-    try {
-      await api.markAllNotificationsRead();
-    } catch {}
-  };
-
-  const clearAll = async () => {
-    setNotifications([]);
-    try {
-      localStorage.removeItem(NOTIFS_STORAGE_KEY);
-    } catch {}
-    setOpen(false);
-    try {
-      await api.clearAllNotifications();
-    } catch {}
-  };
-
-  if (!isCustomer) return null;
+  // The bell is the customer's panel; staff use the dashboard header instead
+  if (!user || user.role !== 'customer') return null;
 
   return (
     <div className="relative" ref={dropdownRef}>
@@ -332,7 +111,7 @@ export function CustomerNotificationBell() {
       </button>
 
       {open && (
-        <div className="absolute right-0 mt-2 w-80 sm:w-96 overflow-hidden rounded-xl border border-border bg-card shadow-2xl animate-in fade-in slide-in-from-top-2 duration-150 z-[100]">
+        <div className="fixed inset-x-3 top-16 sm:absolute sm:inset-x-auto sm:top-auto sm:right-0 sm:mt-2 sm:w-96 overflow-hidden rounded-xl border border-border bg-card shadow-2xl animate-in fade-in slide-in-from-top-2 duration-150 z-[100]">
           {/* Header */}
           <div className="flex items-center justify-between border-b border-border bg-accent/50 px-4 py-3">
             <div className="flex items-center gap-2">
@@ -389,26 +168,8 @@ export function CustomerNotificationBell() {
                   <button
                     key={notif.id}
                     onClick={() => {
-                      setNotifications((prev) => {
-                        const updated = prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n));
-                        try {
-                          localStorage.setItem(NOTIFS_STORAGE_KEY, JSON.stringify(updated));
-                        } catch {}
-                        return updated;
-                      });
-                      try {
-                        api.markNotificationRead(notif.id);
-                      } catch {}
-
-                      if (notif.orderId) {
-                        window.location.href = `/orders?orderId=${notif.orderId}`;
-                      } else if (
-                        notif.type === 'reservation' ||
-                        Boolean(notif.reservationId) ||
-                        notif.title?.toLowerCase().includes('reservation')
-                      ) {
-                        window.location.href = '/reservations';
-                      }
+                      markRead(notif.id);
+                      openTarget(notif);
                       setOpen(false);
                     }}
                     className={cn(
@@ -424,7 +185,7 @@ export function CustomerNotificationBell() {
                       <p className="text-[11px] text-muted-foreground mt-0.5 line-clamp-2">{notif.message}</p>
                       <p className="text-[10px] text-muted-foreground/60 mt-1 flex items-center gap-1">
                         <Clock className="h-3 w-3" />
-                        {notif.time}
+                        {formatNotificationTime(notif)}
                       </p>
                     </div>
                     {!notif.read && (
@@ -441,7 +202,7 @@ export function CustomerNotificationBell() {
             <div className="border-t border-border px-4 py-2.5 text-center">
               <button
                 onClick={() => {
-                  window.location.href = '/orders';
+                  router.push('/orders');
                   setOpen(false);
                 }}
                 className="text-xs font-semibold text-primary hover:underline"
@@ -469,29 +230,4 @@ function extractStatus(text: string): string {
   if (lower.includes('delivered')) return 'delivered';
   if (lower.includes('completed') || lower.includes('handover')) return 'completed';
   return 'default';
-}
-
-function getStatusEmoji(status: string): string {
-  switch (status) {
-    case 'confirmed':
-      return '🎉';
-    case 'declined':
-      return '❌';
-    case 'reservation':
-      return '📅';
-    case 'preparing':
-      return '👨‍🍳';
-    case 'ready':
-      return '✅';
-    case 'served':
-      return '🍽️';
-    case 'out_for_delivery':
-      return '🏍️';
-    case 'delivered':
-      return '📦';
-    case 'completed':
-      return '🎉';
-    default:
-      return '🔔';
-  }
 }
