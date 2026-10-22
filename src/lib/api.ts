@@ -1,11 +1,30 @@
-const getApiBaseUrl = (): string => {
-  if (typeof window !== 'undefined') {
-    // If running in browser and hostname is 127.0.0.1, match host to prevent cross-origin localhost/127.0.0.1 mismatch
-    if (window.location.hostname === '127.0.0.1') {
-      return 'http://127.0.0.1:5001/api';
-    }
+import { clearAuth, setStoredAuth, updateStoredUser } from './auth';
+
+/** If the .env points at localhost but the page was opened from another host
+ *  (127.0.0.1, or the Network/LAN IP Next prints), talk to the backend on that same host. */
+export const resolveBackendUrl = (configured: string): string => {
+  if (typeof window === 'undefined') return configured;
+  const host = window.location.hostname;
+  if (host && host !== 'localhost' && /:\/\/localhost(?=[:/]|$)/.test(configured)) {
+    return configured.replace('://localhost', `://${host}`);
   }
-  return process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api';
+  return configured;
+};
+
+const getApiBaseUrl = (): string =>
+  resolveBackendUrl(process.env.NEXT_PUBLIC_API_URL || 'http://localhost:5001/api');
+
+/** Session expired / account disabled → sign out and send the user to the login page once. */
+let redirectingToLogin = false;
+const handleExpiredSession = (message: string) => {
+  if (typeof window === 'undefined' || redirectingToLogin) return;
+  const hadSession = !!localStorage.getItem('rms_token');
+  if (!hadSession) return;
+  redirectingToLogin = true;
+  clearAuth();
+  const here = window.location.pathname + window.location.search;
+  const params = new URLSearchParams({ redirect: here, reason: message });
+  window.location.href = `/login?${params.toString()}`;
 };
 
 const getAuthHeaders = (): Record<string, string> => {
@@ -42,7 +61,12 @@ async function apiRequest<T>(endpoint: string, options: RequestInit = {}): Promi
   const data = await response.json().catch(() => null);
 
   if (!response.ok) {
-    throw new Error(data?.message || `Request failed with status ${response.status}`);
+    const message = data?.message || `Request failed with status ${response.status}`;
+    const isAuthCall = endpoint.startsWith('/auth/login') || endpoint.startsWith('/auth/register') || endpoint.startsWith('/auth/google');
+    if (!isAuthCall && (response.status === 401 || (response.status === 403 && /suspended|inactive/i.test(message)))) {
+      handleExpiredSession(response.status === 401 ? 'Your session has expired. Please sign in again.' : message);
+    }
+    throw new Error(message);
   }
 
   return data;
@@ -55,10 +79,7 @@ export const api = {
       method: 'POST',
       body: JSON.stringify(credentials),
     });
-    if (res.token && typeof window !== 'undefined') {
-      localStorage.setItem('rms_token', res.token);
-      localStorage.setItem('rms_user', JSON.stringify(res.user));
-    }
+    if (res.token) setStoredAuth(res.token, res.user);
     return res;
   },
 
@@ -76,11 +97,16 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ credential }),
     });
-    if (res.token && typeof window !== 'undefined') {
-      localStorage.setItem('rms_token', res.token);
-      localStorage.setItem('rms_user', JSON.stringify(res.user));
-    }
+    if (res.token) setStoredAuth(res.token, res.user);
     return res;
+  },
+
+  async forgotPassword(email: string) {
+    return apiRequest<any>('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) });
+  },
+
+  async sendContactMessage(data: { name: string; email: string; subject?: string; message: string }) {
+    return apiRequest<any>('/contact', { method: 'POST', body: JSON.stringify(data) });
   },
 
   async getMe() {
@@ -92,21 +118,12 @@ export const api = {
       method: 'PUT',
       body: JSON.stringify(data),
     });
-    if (res.user && typeof window !== 'undefined') {
-      const currentStored = localStorage.getItem('rms_user');
-      const parsed = currentStored ? JSON.parse(currentStored) : {};
-      const merged = { ...parsed, ...res.user };
-      localStorage.setItem('rms_user', JSON.stringify(merged));
-      window.dispatchEvent(new Event('storage'));
-    }
+    if (res.user) updateStoredUser(res.user);
     return res;
   },
 
   logout() {
-    if (typeof window !== 'undefined') {
-      localStorage.removeItem('rms_token');
-      localStorage.removeItem('rms_user');
-    }
+    clearAuth();
   },
 
   // Tables & Seats (25 tables T1-T25, 4 seats S1-S4)
@@ -290,6 +307,15 @@ export const api = {
     });
   },
 
+  async getReservationAvailability(date: string, time: string): Promise<Record<string, string[]>> {
+    const res: any = await apiRequest(`/reservations/availability?${new URLSearchParams({ date, time }).toString()}`);
+    return res?.data?.bookedSeats || {};
+  },
+
+  async cancelMyReservation(id: string) {
+    return apiRequest<any>(`/reservations/${id}/cancel`, { method: 'PUT' });
+  },
+
   async updateReservationStatus(id: string, status: string) {
     return apiRequest<any>(`/reservations/${id}/status`, {
       method: 'PUT',
@@ -309,6 +335,14 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ changeAmount, reason }),
     });
+  },
+
+  async createInventoryItem(data: any) {
+    return apiRequest<any>('/inventory', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async deleteInventoryItem(id: string) {
+    return apiRequest<any>(`/inventory/${id}`, { method: 'DELETE' });
   },
 
   async updateInventoryItem(id: string, data: any) {
@@ -350,6 +384,18 @@ export const api = {
     return res.data || [];
   },
 
+  async createSupplier(data: any) {
+    return apiRequest<any>('/suppliers', { method: 'POST', body: JSON.stringify(data) });
+  },
+
+  async updateSupplier(id: string, data: any) {
+    return apiRequest<any>(`/suppliers/${id}`, { method: 'PUT', body: JSON.stringify(data) });
+  },
+
+  async deleteSupplier(id: string) {
+    return apiRequest<any>(`/suppliers/${id}`, { method: 'DELETE' });
+  },
+
   async getPurchases() {
     const res: any = await apiRequest('/suppliers/purchases');
     return res.data || [];
@@ -389,8 +435,8 @@ export const api = {
   },
 
   // Reviews
-  async getReviews() {
-    const res: any = await apiRequest('/reviews');
+  async getReviews(menuItemId?: string) {
+    const res: any = await apiRequest(`/reviews${menuItemId ? `?menuItemId=${encodeURIComponent(menuItemId)}` : ''}`);
     return res.data || [];
   },
 
@@ -453,6 +499,6 @@ export const api = {
   async getAuditLogs(params?: Record<string, string>) {
     const queryString = params ? '?' + new URLSearchParams(params).toString() : '';
     const res: any = await apiRequest(`/audit-logs${queryString}`);
-    return res.data || [];
+    return { data: res.data || [], total: res.total || 0, page: res.page || 1 };
   },
 };
