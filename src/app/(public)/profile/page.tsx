@@ -1,5 +1,7 @@
 'use client';
 
+import { RequireRole } from '@/components/auth/require-role';
+
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
@@ -39,7 +41,7 @@ const ORDER_STATUS_CONFIG: Record<string, { label: string; color: string; icon: 
   completed:   { label: 'Completed',   color: 'bg-emerald-500/10 text-emerald-600 border-emerald-500/30', icon: CheckCircle2 },
 };
 
-export default function ProfilePage() {
+function ProfilePageContent() {
   const router = useRouter();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [orders, setOrders] = useState<any[]>([]);
@@ -61,7 +63,7 @@ export default function ProfilePage() {
 
     // Fetch orders belonging to this customer's email
     api.getOrders({ email: stored.email })
-      .then((data: any[]) => setOrders(data))
+      .then((data: any[]) => setOrders(Array.isArray(data) ? data : []))
       .catch(() => setOrders([]))
       .finally(() => setLoadingOrders(false));
   }, [router]);
@@ -70,14 +72,13 @@ export default function ProfilePage() {
     if (!editName.trim()) { toast.error('Name cannot be empty'); return; }
     setSavingProfile(true);
     try {
-      // Optimistic update in localStorage
-      const updated = { ...user!, name: editName.trim(), phone: editPhone.trim() };
-      localStorage.setItem('rms_user', JSON.stringify(updated));
-      setUser(updated);
+      // Saved on the server so it survives logging out / other devices
+      const res = await api.updateProfile({ name: editName.trim(), phone: editPhone.trim() });
+      setUser((prev) => (prev ? { ...prev, ...res.user } : prev));
       setEditing(false);
       toast.success('Profile updated!');
-    } catch {
-      toast.error('Failed to update profile');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to update profile');
     } finally {
       setSavingProfile(false);
     }
@@ -315,5 +316,13 @@ export default function ProfilePage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ProfilePage() {
+  return (
+    <RequireRole roles={['customer', 'admin', 'manager', 'cashier', 'kitchen', 'waiter', 'delivery']}>
+      <ProfilePageContent />
+    </RequireRole>
   );
 }

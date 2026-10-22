@@ -1,5 +1,7 @@
 'use client';
 
+import { RequireRole } from '@/components/auth/require-role';
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -9,12 +11,14 @@ import { Input } from '@/components/ui/input';
 import { Separator } from '@/components/ui/separator';
 import { Trash2, Plus, Minus, ShoppingBag, ArrowLeft, ArrowRight, Lock, LogIn, Utensils, Bike, CheckCircle2 } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
-import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon, getCouponMinSpend } from '@/lib/cart';
+import { getCart, saveCart, type CartItem, saveCoupon, getSavedCoupon, clearCoupon, getCouponMinSpend, computeCouponDiscount } from '@/lib/cart';
+import { useRestaurantSettings, calcTax } from '@/hooks/use-restaurant-settings';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
+import { FoodImage } from '@/components/restaurant/food-image';
 
-export default function CartPage() {
+function CartPageContent() {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderType, setOrderType] = useState<'dine-in' | 'takeaway' | 'delivery'>('dine-in');
@@ -26,6 +30,7 @@ export default function CartPage() {
   const [couponMinOrder, setCouponMinOrder] = useState<number>(0);
   const [couponMaxDiscount, setCouponMaxDiscount] = useState<number | undefined>(undefined);
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const settings = useRestaurantSettings();
 
   useEffect(() => {
     setIsLoggedIn(!!getStoredUser());
@@ -85,10 +90,10 @@ export default function CartPage() {
     return () => window.removeEventListener('cart_updated', handleUpdate);
   }, []);
 
-  const updateQty = (id: string, delta: number) => {
+  const updateQty = (key: string, delta: number) => {
     setCart((prev) => {
       const updated = prev.map((c) =>
-        c.menuItemId === id ? { ...c, quantity: Math.max(1, c.quantity + delta) } : c
+        c.key === key ? { ...c, quantity: Math.min(99, Math.max(1, c.quantity + delta)) } : c
       );
       saveCart(updated);
       return updated;
@@ -116,15 +121,7 @@ export default function CartPage() {
       return;
     }
 
-    let newDiscount = 0;
-    if (couponType === 'percentage') {
-      newDiscount = Math.round((currentSubtotal * couponValue) / 100);
-      if (couponMaxDiscount && newDiscount > couponMaxDiscount) {
-        newDiscount = couponMaxDiscount;
-      }
-    } else {
-      newDiscount = couponValue;
-    }
+    const newDiscount = computeCouponDiscount(currentSubtotal, couponType, couponValue, couponMaxDiscount);
     setDiscount(newDiscount);
     saveCoupon({
       code: appliedCoupon,
@@ -136,9 +133,9 @@ export default function CartPage() {
     });
   }, [cart, appliedCoupon, couponType, couponValue, couponMinOrder, couponMaxDiscount]);
 
-  const removeItem = (id: string) => {
+  const removeItem = (key: string) => {
     setCart((prev) => {
-      const updated = prev.filter((c) => c.menuItemId !== id);
+      const updated = prev.filter((c) => c.key !== key);
       saveCart(updated);
       return updated;
     });
@@ -229,9 +226,9 @@ export default function CartPage() {
     const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
     return sum + (item.price + modPrice) * item.quantity;
   }, 0);
-  const tax = Math.round(subtotal * 0.1);
+  const tax = calcTax(subtotal, settings.taxRate);
   // Delivery charge applies ONLY for delivery orders, never for dine-in or takeaway
-  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
+  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? settings.deliveryFee : 0;
   const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
   if (cart.length === 0) {
@@ -261,23 +258,25 @@ export default function CartPage() {
             const modPrice = (item.modifiers || []).reduce((s, m) => s + m.price, 0);
             const itemTotal = (item.price + modPrice) * item.quantity;
             return (
-              <Card key={item.menuItemId}>
-                <CardContent className="flex items-center gap-4 p-4">
-                  <img src={item.image} alt={item.name} className="h-16 w-16 rounded-lg object-cover" />
-                  <div className="flex-1 min-w-0">
+              <Card key={item.key}>
+                <CardContent className="flex flex-wrap items-center gap-3 p-4 sm:flex-nowrap sm:gap-4">
+                  <FoodImage src={item.image} alt={item.name} className="h-16 w-16 shrink-0 rounded-lg object-cover" />
+                  <div className="min-w-0 flex-1">
                     <p className="font-medium">{item.name}</p>
                     {item.modifiers && item.modifiers.length > 0 && (
                       <p className="text-xs text-muted-foreground">{item.modifiers.map((m) => m.name).join(', ')}</p>
                     )}
                     <p className="text-sm font-bold text-primary">{formatCurrency(item.price + modPrice)}</p>
                   </div>
-                  <div className="flex items-center gap-2">
-                    <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => updateQty(item.menuItemId, -1)}><Minus className="h-3 w-3" /></Button>
-                    <span className="w-8 text-center font-medium">{item.quantity}</span>
-                    <Button size="icon" variant="outline" className="h-8 w-8" onClick={() => updateQty(item.menuItemId, 1)}><Plus className="h-3 w-3" /></Button>
+                  <div className="ml-auto flex w-full items-center justify-between gap-2 sm:ml-0 sm:w-auto sm:justify-start">
+                    <div className="flex items-center gap-2">
+                      <Button size="icon" variant="outline" className="h-8 w-8" aria-label="Decrease quantity" onClick={() => updateQty(item.key!, -1)}><Minus className="h-3 w-3" /></Button>
+                      <span className="w-8 text-center font-medium">{item.quantity}</span>
+                      <Button size="icon" variant="outline" className="h-8 w-8" aria-label="Increase quantity" onClick={() => updateQty(item.key!, 1)}><Plus className="h-3 w-3" /></Button>
+                    </div>
+                    <p className="min-w-[5rem] text-right font-bold">{formatCurrency(itemTotal)}</p>
+                    <Button size="icon" variant="ghost" className="text-destructive" aria-label="Remove item" onClick={() => removeItem(item.key!)}><Trash2 className="h-4 w-4" /></Button>
                   </div>
-                  <p className="w-20 text-right font-bold">{formatCurrency(itemTotal)}</p>
-                  <Button size="icon" variant="ghost" className="text-destructive" onClick={() => removeItem(item.menuItemId)}><Trash2 className="h-4 w-4" /></Button>
                 </CardContent>
               </Card>
             );
@@ -286,7 +285,7 @@ export default function CartPage() {
 
         {/* Summary */}
         <div className="lg:col-span-1">
-          <Card className="sticky top-20">
+          <Card className="lg:sticky lg:top-20">
             <CardHeader><CardTitle className="text-lg">Order Summary</CardTitle></CardHeader>
             <CardContent className="space-y-4">
               {/* Order Type Selector */}
@@ -332,7 +331,7 @@ export default function CartPage() {
                   </p>
                 ) : (
                   <p className="mt-2 text-[11px] text-amber-600 font-medium flex items-center gap-1.5 animate-in fade-in duration-200">
-                    <Bike className="h-3.5 w-3.5" /> Delivery fee of ৳50 applies for home delivery
+                    <Bike className="h-3.5 w-3.5" /> Delivery fee of ৳{settings.deliveryFee} applies for home delivery
                   </p>
                 )}
               </div>
@@ -345,7 +344,7 @@ export default function CartPage() {
                     <span>-{formatCurrency(discount)}</span>
                   </div>
                 )}
-                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
+                <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax ({settings.taxRate}%)</span><span>{formatCurrency(tax)}</span></div>
                 <div className="flex justify-between text-sm">
                   <span className="text-muted-foreground">Delivery Fee</span>
                   <span className={deliveryFee === 0 ? 'text-emerald-600 font-medium' : ''}>
@@ -389,7 +388,7 @@ export default function CartPage() {
                       <Button variant="outline" size="sm" onClick={applyCoupon}>Apply</Button>
                     </div>
                     <p className="text-[11px] text-muted-foreground leading-snug">
-                      Offers: <span className="font-semibold text-primary">SAVE20</span> (min spend ৳400) • <span className="font-semibold text-primary">SAVE30</span> (min spend ৳500)
+                      See current codes on the <Link href="/offers" className="font-semibold text-primary hover:underline">Offers page</Link>.
                     </p>
                   </div>
                 )}
@@ -399,5 +398,13 @@ export default function CartPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function CartPage() {
+  return (
+    <RequireRole roles={['customer']}>
+      <CartPageContent />
+    </RequireRole>
   );
 }

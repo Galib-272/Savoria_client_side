@@ -1,5 +1,7 @@
 'use client';
 
+import { RequireRole } from '@/components/auth/require-role';
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -12,7 +14,8 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { ArrowLeft, CheckCircle2, CreditCard, Armchair, MapPin, Utensils, ShoppingBag, Bike } from 'lucide-react';
 import { formatCurrency, cn } from '@/lib/utils';
-import { getCart, clearCart, type CartItem, getSavedCoupon, saveCoupon, clearCoupon, getCouponMinSpend } from '@/lib/cart';
+import { getCart, clearCart, type CartItem, getSavedCoupon, saveCoupon, clearCoupon, getCouponMinSpend, computeCouponDiscount } from '@/lib/cart';
+import { useRestaurantSettings, calcTax } from '@/hooks/use-restaurant-settings';
 import { getStoredUser } from '@/lib/auth';
 import { api } from '@/lib/api';
 import { toast } from 'sonner';
@@ -20,7 +23,7 @@ import { toast } from 'sonner';
 import { StripePaymentModal } from '@/components/checkout/stripe-payment-modal';
 import { TableSeatSelector } from '@/components/checkout/table-seat-selector';
 
-export default function CheckoutPage() {
+function CheckoutPageContent() {
   const router = useRouter();
   const [cart, setCart] = useState<CartItem[]>([]);
   const [orderType, setOrderType] = useState<'dine-in' | 'takeaway' | 'delivery'>('dine-in');
@@ -36,6 +39,8 @@ export default function CheckoutPage() {
   const [notes, setNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
   const [createdOrderId, setCreatedOrderId] = useState<string | null>(null);
+  const [createdOrderNumber, setCreatedOrderNumber] = useState<string>('');
+  const settings = useRestaurantSettings();
   const [stripeModalOpen, setStripeModalOpen] = useState(false);
 
   // Coupon state
@@ -127,15 +132,7 @@ export default function CheckoutPage() {
       return;
     }
 
-    let newDiscount = 0;
-    if (couponType === 'percentage') {
-      newDiscount = Math.round((subtotal * couponValue) / 100);
-      if (couponMaxDiscount && newDiscount > couponMaxDiscount) {
-        newDiscount = couponMaxDiscount;
-      }
-    } else {
-      newDiscount = couponValue;
-    }
+    const newDiscount = computeCouponDiscount(subtotal, couponType, couponValue, couponMaxDiscount);
     setDiscount(newDiscount);
     saveCoupon({
       code: appliedCoupon,
@@ -207,9 +204,9 @@ export default function CheckoutPage() {
     toast.success('Coupon removed');
   };
 
-  const tax = Math.round(subtotal * 0.1);
-  // Delivery fee applies strictly for delivery orders only
-  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
+  const tax = calcTax(subtotal, settings.taxRate);
+  // Delivery fee applies strictly for delivery orders only (same value the server charges)
+  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? settings.deliveryFee : 0;
   const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
   const handleTableSeatSelect = (tableId: string, tableNum: number, tableName: string, seats: string[]) => {
@@ -242,12 +239,9 @@ export default function CheckoutPage() {
       return;
     }
 
-    // Cash selection: instantly receive payment and create order
+    // Cash: the order goes to the kitchen now and is paid at the counter / to the waiter / to the rider
     if (paymentMethod === 'cash') {
-      executeOrderCreation({
-        payMethod: 'cash',
-        payStatus: 'paid',
-      });
+      executeOrderCreation({ payMethod: 'cash' }).catch(() => undefined);
       return;
     }
 
@@ -257,72 +251,48 @@ export default function CheckoutPage() {
 
   const executeOrderCreation = async ({
     payMethod,
-    payStatus,
     stripePaymentIntentId,
   }: {
     payMethod: string;
-    payStatus: string;
     stripePaymentIntentId?: string;
   }) => {
     setSubmitting(true);
     try {
+      // The server prices every item from the menu and recalculates tax, fees and the coupon
       const orderData: Record<string, any> = {
         orderType,
-        customerName: name,
-        customerPhone: phone,
-        customerEmail: email.trim().toLowerCase(),
-        tableNumber: orderType === 'dine-in' ? Number(tableNumber) || 1 : undefined,
-        address: orderType === 'delivery' ? deliveryAddress : undefined,
-        deliveryAddress: orderType === 'delivery' ? deliveryAddress : undefined,
+        customerName: name.trim(),
+        customerPhone: phone.trim(),
+        tableNumber: orderType === 'dine-in' ? Number(tableNumber) : undefined,
+        seats: orderType === 'dine-in' ? selectedSeats : undefined,
+        address: orderType === 'delivery' ? deliveryAddress.trim() : undefined,
         items: cart.map((c) => ({
           menuItemId: c.menuItemId,
           name: c.name,
-          price: c.price,
           quantity: c.quantity,
           modifiers: c.modifiers || [],
         })),
-        subtotal,
-        discount,
         couponCode: appliedCoupon || undefined,
-        tax,
-        deliveryFee,
-        total,
         paymentMethod: payMethod,
-        paymentStatus: payStatus,
         stripePaymentIntentId,
-        notes,
+        notes: notes.trim() || undefined,
       };
 
-      // Include dine-in seat selection metadata
-      if (orderType === 'dine-in' && selectedSeats.length > 0) {
-        orderData.selectedTableId = selectedTableId;
-        orderData.selectedTableName = selectedTableName;
-        orderData.selectedSeats = selectedSeats;
-      }
-
       const res = await api.createOrder(orderData);
-      const orderId = res?.order?._id || res?.order?.id || res?.data?._id || res?.data?.id || 'ORD-NEW';
+      const order = res?.data;
+      const orderId = order?._id || order?.id;
       setCreatedOrderId(orderId);
+      setCreatedOrderNumber(order?.orderNumber || '');
       clearCart();
-      setStripeModalOpen(false);
-
-      // Mark selected seats as occupied on the table
-      if (orderType === 'dine-in' && selectedTableId && selectedSeats.length > 0) {
-        try {
-          for (const seat of selectedSeats) {
-            await api.updateSeatStatus(selectedTableId, seat, 'occupied', name);
-          }
-        } catch {
-          // Non-blocking — seats might have been updated by kitchen/waiter
-        }
-      }
 
       if (payMethod === 'cash') {
-        toast.success(`Order confirmed! Cash payment of ${formatCurrency(total)} instantly received.`);
+        const where =
+          orderType === 'delivery' ? 'to the rider on delivery' : orderType === 'takeaway' ? 'at the counter when you collect it' : 'to your waiter at the table';
+        toast.success(`Order ${order?.orderNumber} placed! Please pay ${formatCurrency(order?.total ?? total)} ${where}.`);
         router.push(`/orders?orderId=${orderId}`);
       } else {
-        toast.success(`Payment of ${formatCurrency(total)} confirmed! Order placed successfully.`);
-        router.push(`/orders?orderId=${orderId}`);
+        // the payment modal shows its own success state and redirects
+        toast.success(`Payment of ${formatCurrency(order?.total ?? total)} received. Order ${order?.orderNumber} placed!`);
       }
       return res;
     } catch (err: any) {
@@ -340,8 +310,8 @@ export default function CheckoutPage() {
         <div className="mb-4 flex h-20 w-20 items-center justify-center rounded-full bg-success/10 text-success animate-in zoom-in">
           <CheckCircle2 className="h-10 w-10" />
         </div>
-        <h2 className="font-display text-2xl font-bold">Payment & Order Confirmed!</h2>
-        <p className="mt-2 text-muted-foreground">Order #{createdOrderId} has been received. Redirecting to live order tracking...</p>
+        <h2 className="font-display text-2xl font-bold">Order Confirmed!</h2>
+        <p className="mt-2 text-muted-foreground">Order {createdOrderNumber} has been received. Redirecting to live order tracking...</p>
       </div>
     );
   }
@@ -368,7 +338,7 @@ export default function CheckoutPage() {
                 {[
                   { key: 'dine-in', label: 'Dine In', icon: Utensils, note: 'Reserve table & seats' },
                   { key: 'takeaway', label: 'Takeaway', icon: ShoppingBag, note: 'Pickup in store' },
-                  { key: 'delivery', label: 'Delivery', icon: Bike, note: 'Home delivery (৳50)' },
+                  { key: 'delivery', label: 'Delivery', icon: Bike, note: `Home delivery (৳${settings.deliveryFee})` },
                 ].map(({ key, label, icon: Icon, note }) => {
                   const isActive = orderType === key;
                   return (
@@ -515,7 +485,7 @@ export default function CheckoutPage() {
 
         {/* Summary */}
         <div className="lg:col-span-1">
-          <Card className="sticky top-20">
+          <Card className="lg:sticky lg:top-20">
             <CardHeader><CardTitle className="text-lg">Order Summary</CardTitle></CardHeader>
             <CardContent className="space-y-3">
               <div className="space-y-2 text-sm max-h-60 overflow-y-auto">
@@ -541,7 +511,7 @@ export default function CheckoutPage() {
                   <span>-{formatCurrency(discount)}</span>
                 </div>
               )}
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax ({settings.taxRate}%)</span><span>{formatCurrency(tax)}</span></div>
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground">Delivery Fee</span>
                 <span className={deliveryFee === 0 ? 'text-emerald-600 font-medium' : ''}>
@@ -629,11 +599,18 @@ export default function CheckoutPage() {
         onSuccess={async ({ paymentMethod: confirmedMethod, stripePaymentIntentId }) => {
           return await executeOrderCreation({
             payMethod: confirmedMethod,
-            payStatus: 'paid',
             stripePaymentIntentId,
           });
         }}
       />
     </div>
+  );
+}
+
+export default function CheckoutPage() {
+  return (
+    <RequireRole roles={['customer']}>
+      <CheckoutPageContent />
+    </RequireRole>
   );
 }

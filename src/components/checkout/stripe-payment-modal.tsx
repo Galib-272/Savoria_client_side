@@ -14,6 +14,7 @@ import {
   Shield,
   HelpCircle,
 } from 'lucide-react';
+import { api } from '@/lib/api';
 import { formatCurrency } from '@/lib/utils';
 
 // Official Stripe Wordmark SVG
@@ -257,16 +258,11 @@ export function StripePaymentModal({
     setStatus('processing');
 
     try {
+      // Demo Stripe: the server issues a test payment intent for any amount (no real money is charged)
+      const intent = await api.createStripeIntent(amount);
       const res = await onSuccess({
-        paymentMethod:
-          activeTab === 'card'
-            ? 'card'
-            : activeTab === 'mobile'
-            ? 'mobile_banking'
-            : 'bank_transfer',
-        stripePaymentIntentId: `pi_live_${Date.now()}_stripe_${Math.random()
-          .toString(36)
-          .substring(7)}`,
+        paymentMethod: activeTab === 'card' ? 'card' : activeTab === 'mobile' ? 'mobile_banking' : 'bank_transfer',
+        stripePaymentIntentId: intent?.paymentIntentId,
       });
 
       setStatus('success');
@@ -694,6 +690,10 @@ export function StripePaymentModal({
                   </div>
                 </div>
               )}
+
+              <p className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-center text-[11px] font-medium text-amber-800">
+                Demo payment page — any card details and amount are accepted. No real money is charged.
+              </p>
 
               {/* Authentic Stripe Blurple Pay Button */}
               <div className="pt-2">

@@ -5,27 +5,25 @@ import Link from 'next/link';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { ArrowRight, Tag, Clock, TrendingUp, Copy, Check } from 'lucide-react';
-import { offers as fallbackOffers, coupons as fallbackCoupons } from '@/lib/mock-data';
+import { couponsToOffers } from '@/lib/offers';
 import { api } from '@/lib/api';
 import type { Coupon } from '@/lib/types';
 import { toast } from 'sonner';
 
 export default function OffersPage() {
-  const [couponList, setCouponList] = useState<Coupon[]>(fallbackCoupons);
+  const [couponList, setCouponList] = useState<Coupon[]>([]);
   const [copiedCode, setCopiedCode] = useState<string | null>(null);
 
   useEffect(() => {
     api.getCoupons()
       .then((data) => {
-        if (data && data.length) {
-          setCouponList(data.map((c: any) => ({ ...c, id: c._id || c.id })));
-        }
+        setCouponList((Array.isArray(data) ? data : []).map((c: any) => ({ ...c, id: c._id || c.id })));
       })
       .catch(console.error);
   }, []);
 
   const handleCopyCode = (code: string) => {
-    navigator.clipboard.writeText(code);
+    navigator.clipboard?.writeText(code).catch(() => undefined);
     setCopiedCode(code);
     toast.success(`Coupon code ${code} copied to clipboard!`);
     setTimeout(() => setCopiedCode(null), 2500);
@@ -40,7 +38,7 @@ export default function OffersPage() {
 
       {/* Offers Grid */}
       <div className="mb-12 grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-        {fallbackOffers.map((offer) => (
+        {couponsToOffers(couponList).map((offer) => (
           <div
             key={offer.id}
             className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${offer.color} p-6 text-white shadow-lg transition-transform hover:scale-105`}

@@ -1,5 +1,7 @@
 'use client';
 
+import { RequireRole } from '@/components/auth/require-role';
+
 import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
@@ -109,7 +111,10 @@ const reservationStatusConfig: Record<
   },
 };
 
-export default function ReservationsPage() {
+/** YYYY-MM-DD in the user's own timezone (toISOString() would shift the day for Bangladesh, UTC+6) */
+const toLocalDateString = (d: Date) => new Intl.DateTimeFormat('en-CA').format(d);
+
+function ReservationsPageContent() {
   const router = useRouter();
   const [user, setUser] = useState<CurrentUser | null>(null);
   const [checkingAuth, setCheckingAuth] = useState(true);
@@ -137,6 +142,10 @@ export default function ReservationsPage() {
 
   // User's reservation history
   const [myReservations, setMyReservations] = useState<Reservation[]>([]);
+  // Seats already booked by other reservations for the chosen date & time
+  const [bookedSeats, setBookedSeats] = useState<Record<string, string[]>>({});
+  const dateStr = date ? toLocalDateString(date) : '';
+  const isToday = dateStr === toLocalDateString(new Date());
 
   // 1. Check Auth & pre-populate
   useEffect(() => {
@@ -174,10 +183,7 @@ export default function ReservationsPage() {
   const fetchReservations = async () => {
     try {
       const data = await api.getReservations();
-      if (data && data.length) {
-        const mapped = data.map((r: any) => ({ ...r, id: r._id || r.id }));
-        setMyReservations(mapped);
-      }
+      setMyReservations((Array.isArray(data) ? data : []).map((r: any) => ({ ...r, id: r._id || r.id })));
     } catch (err) {
       console.error('Failed to fetch reservations:', err);
     }
@@ -195,7 +201,6 @@ export default function ReservationsPage() {
     const socket = getSocket();
     if (!socket) return;
 
-    socket.emit('join_role_room', 'customer');
 
     // Live Table updates from staff/waiter actions
     const handleTableUpdated = (updatedTable: any) => {
@@ -212,30 +217,13 @@ export default function ReservationsPage() {
       );
     };
 
-    // Live Reservation status update from waiter (accept / reject)
+    // Live status of the customer's own reservations (the bell shows the popup)
     const handleReservationStatusUpdate = (data: any) => {
-      const { reservation, notification } = data || {};
-      if (reservation) {
-        const resId = reservation._id || reservation.id;
-        setMyReservations((prev) =>
-          prev.map((r) => (r.id === resId ? { ...r, status: reservation.status } : r))
-        );
-
-        if (reservation.status === 'confirmed') {
-          toast.success('🎉 Reservation Confirmed by Waiter!', {
-            description: `Your table T${reservation.tableNumber} on ${reservation.date} at ${reservation.time} is booked!`,
-            duration: 8000,
-          });
-        } else if (reservation.status === 'cancelled') {
-          toast.error('❌ Reservation Request Declined', {
-            description: `The waiter declined the request for Table T${reservation.tableNumber}. Please choose another table or time.`,
-            duration: 8000,
-          });
-        }
-
-        // Refresh tables to ensure seat status updates
-        fetchTables();
-      }
+      const reservation = data?.reservation;
+      if (!reservation) return;
+      const resId = reservation._id || reservation.id;
+      setMyReservations((prev) => prev.map((r) => (r.id === resId ? { ...r, status: reservation.status } : r)));
+      fetchTables();
     };
 
     socket.on('table:updated', handleTableUpdated);
@@ -322,7 +310,7 @@ export default function ReservationsPage() {
 
     setSubmitting(true);
     try {
-      const formattedDate = date.toISOString().split('T')[0];
+      const formattedDate = toLocalDateString(date);
       const payload = {
         customerName: name,
         customerPhone: phone,
@@ -350,6 +338,68 @@ export default function ReservationsPage() {
       toast.error(err?.message || 'Failed to submit reservation request');
     } finally {
       setSubmitting(false);
+    }
+  };
+
+  // Seats booked for the chosen date & time (other customers' reservations)
+  useEffect(() => {
+    if (!dateStr || !time) return;
+    let alive = true;
+    api
+      .getReservationAvailability(dateStr, time)
+      .then((booked) => alive && setBookedSeats(booked))
+      .catch(() => alive && setBookedSeats({}));
+    return () => {
+      alive = false;
+    };
+  }, [dateStr, time, myReservations.length]);
+
+  // Seat availability for the chosen slot: booked seats are reserved; "occupied right now" only matters for today
+  const displayTables: TableType[] = tables.map((t) => {
+    const booked = bookedSeats[String(t.number)] || [];
+    const unusable = t.status === 'out_of_service' || (isToday && t.status === 'cleaning');
+    const seats = (t.seats || DEFAULT_SEATS).map((seat) => ({
+      ...seat,
+      status: (unusable
+        ? 'occupied'
+        : booked.includes(seat.seatNumber)
+        ? 'reserved'
+        : isToday && seat.status === 'occupied'
+        ? 'occupied'
+        : 'available') as Seat['status'],
+    }));
+    const free = seats.filter((s) => s.status === 'available').length;
+    const status: TableType['status'] = unusable
+      ? t.status
+      : free === 4
+      ? 'available'
+      : seats.some((s) => s.status === 'occupied')
+      ? 'occupied'
+      : 'reserved';
+    return { ...t, seats, status };
+  });
+
+  // Drop a selection that just became unavailable for the new date/time
+  useEffect(() => {
+    if (!selectedTableNumber) return;
+    const table = displayTables.find((t) => t.number === selectedTableNumber);
+    const stillFree = selectedSeats.filter((s) => table?.seats?.find((x) => x.seatNumber === s)?.status === 'available');
+    if (stillFree.length !== selectedSeats.length) {
+      setSelectedSeats(stillFree);
+      if (stillFree.length === 0) setSelectedTableNumber(null);
+      toast.info('Some selected seats are already booked for that date/time — please pick again.');
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookedSeats, isToday]);
+
+  const cancelReservation = async (res: Reservation) => {
+    if (!window.confirm(`Cancel your reservation for Table T${res.tableNumber} on ${res.date} at ${res.time}?`)) return;
+    try {
+      await api.cancelMyReservation(res.id);
+      toast.success('Reservation cancelled');
+      fetchReservations();
+    } catch (err: any) {
+      toast.error(err.message || 'Could not cancel the reservation');
     }
   };
 
@@ -392,13 +442,13 @@ export default function ReservationsPage() {
 
   // Filter tables
   const sections = Array.from(new Set(tables.map((t) => t.section).filter(Boolean)));
-  const filteredTables = tables.filter((t) => {
+  const filteredTables = displayTables.filter((t) => {
     if (selectedSection !== 'all' && t.section !== selectedSection) return false;
     if (selectedStatusFilter !== 'all' && t.status !== selectedStatusFilter) return false;
     return true;
   });
 
-  const selectedTableObj = tables.find((t) => t.number === selectedTableNumber);
+  const selectedTableObj = displayTables.find((t) => t.number === selectedTableNumber);
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8 space-y-8">
@@ -626,7 +676,7 @@ export default function ReservationsPage() {
                   <div className="rounded-lg bg-muted/60 p-3 text-xs w-full text-left space-y-1">
                     <p><span className="font-semibold">Table:</span> T{selectedTableNumber} ({selectedTableObj?.section || 'Main Dining'})</p>
                     <p><span className="font-semibold">Seats:</span> {selectedSeats.join(', ')}</p>
-                    <p><span className="font-semibold">Time:</span> {date?.toISOString().split('T')[0]} at {time}</p>
+                    <p><span className="font-semibold">Time:</span> {dateStr} at {time}</p>
                     <p><span className="font-semibold">Status:</span> <span className="text-amber-600 font-semibold">Pending Waiter Approval</span></p>
                   </div>
                   <Button
@@ -851,6 +901,15 @@ export default function ReservationsPage() {
                         <span>{res.date} at {res.time}</span>
                         <span>{res.guests} guest(s)</span>
                       </div>
+                      {(res.status === 'pending' || res.status === 'confirmed') && (
+                        <button
+                          type="button"
+                          onClick={() => cancelReservation(res)}
+                          className="self-end text-[11px] font-semibold text-destructive hover:underline"
+                        >
+                          Cancel reservation
+                        </button>
+                      )}
                     </div>
                   );
                 })
@@ -860,5 +919,13 @@ export default function ReservationsPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ReservationsPage() {
+  return (
+    <RequireRole roles={['customer']}>
+      <ReservationsPageContent />
+    </RequireRole>
   );
 }

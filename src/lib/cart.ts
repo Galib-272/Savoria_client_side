@@ -4,6 +4,8 @@ export interface CartModifier {
 }
 
 export interface CartItem {
+  /** unique per item + chosen modifiers, so the same dish with different options stays on separate lines */
+  key?: string;
   menuItemId: string;
   name: string;
   image: string;
@@ -12,13 +14,23 @@ export interface CartItem {
   modifiers?: CartModifier[];
 }
 
+export const cartLineKey = (item: Pick<CartItem, 'menuItemId' | 'modifiers'>): string =>
+  `${item.menuItemId}|${(item.modifiers || [])
+    .map((m) => m.name)
+    .sort()
+    .join(',')}`;
+
 export function getCart(): CartItem[] {
   if (typeof window === 'undefined') return [];
   try {
     const raw = localStorage.getItem('rms_cart');
     if (!raw) return [];
     const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
+    if (!Array.isArray(parsed)) return [];
+    // drop leftovers from the old demo menu (ids like "mi-1") — they can't be ordered
+    return parsed
+      .filter((c: CartItem) => /^[0-9a-fA-F]{24}$/.test(String(c.menuItemId)))
+      .map((c: CartItem) => ({ ...c, key: c.key || cartLineKey(c) }));
   } catch {
     return [];
   }
@@ -42,18 +54,21 @@ export function addToCart(
   modifiers: CartModifier[] = []
 ): boolean {
   const user = getStoredUser();
-  if (!user) {
+  // Only customer accounts shop online; staff place orders through the POS
+  if (!user || user.role !== 'customer') {
     return false;
   }
 
   const current = getCart();
-  const effectivePrice = item.discountPrice !== undefined && item.discountPrice !== null ? item.discountPrice : item.price;
-  const existingIndex = current.findIndex((c) => c.menuItemId === item.id);
+  const effectivePrice = item.discountPrice !== undefined && item.discountPrice !== null && item.discountPrice > 0 ? item.discountPrice : item.price;
+  const key = cartLineKey({ menuItemId: item.id, modifiers });
+  const existingIndex = current.findIndex((c) => c.key === key);
 
   if (existingIndex > -1) {
-    current[existingIndex].quantity += quantity;
+    current[existingIndex].quantity = Math.min(99, current[existingIndex].quantity + quantity);
   } else {
     current.push({
+      key,
       menuItemId: item.id,
       name: item.name,
       image: item.image,
@@ -100,19 +115,16 @@ export function getSavedCoupon(): SavedCoupon | null {
   }
 }
 
-export const DEFAULT_COUPON_MIN_SPEND: Record<string, number> = {
-  SAVE20: 400,
-  SAVE30: 500,
-  WEEKEND50: 300,
-  FREEDEL: 600,
-  COMBO15: 800,
-};
+/** Minimum spend comes from the coupon itself (validated by the server) — no hard-coded codes in the app. */
+export function getCouponMinSpend(_code?: string | null, explicitMinOrder?: number): number {
+  return explicitMinOrder !== undefined && explicitMinOrder > 0 ? explicitMinOrder : 0;
+}
 
-export function getCouponMinSpend(code?: string | null, explicitMinOrder?: number): number {
-  if (explicitMinOrder !== undefined && explicitMinOrder > 0) return explicitMinOrder;
-  if (!code) return 0;
-  const upper = code.toUpperCase().trim();
-  return DEFAULT_COUPON_MIN_SPEND[upper] || 0;
+/** Same discount math as the server (never more than the food subtotal). */
+export function computeCouponDiscount(subtotal: number, type: 'percentage' | 'fixed', value: number, maxDiscount?: number): number {
+  let d = type === 'percentage' ? Math.round((subtotal * value) / 100) : value;
+  if (maxDiscount && d > maxDiscount) d = maxDiscount;
+  return Math.max(0, Math.min(d, subtotal));
 }
 
 export function clearCoupon() {

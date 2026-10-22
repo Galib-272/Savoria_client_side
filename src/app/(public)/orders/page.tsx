@@ -1,6 +1,8 @@
 'use client';
 
-import { useState, useEffect, useRef } from 'react';
+import { RequireRole } from '@/components/auth/require-role';
+
+import { Suspense, useState, useEffect } from 'react';
 import Link from 'next/link';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { toast } from 'sonner';
@@ -129,7 +131,7 @@ const STATUS_BADGES: Record<string, { label: string; className: string }> = {
   cancelled: { label: 'Cancelled', className: 'bg-red-500/10 text-red-600 border-red-500/30' },
 };
 
-export default function OrdersPage() {
+function OrdersPageInner() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const selectedOrderIdParam = searchParams.get('orderId');
@@ -140,8 +142,6 @@ export default function OrdersPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [updatingPickup, setUpdatingPickup] = useState(false);
-  const ordersRef = useRef<any[]>([]);
-  ordersRef.current = orders;
 
   const handleConfirmPickup = async (order: any) => {
     const orderId = order._id || order.id;
@@ -159,6 +159,23 @@ export default function OrdersPage() {
       }
     } catch (err: any) {
       toast.error(err.message || 'Failed to confirm pickup');
+    } finally {
+      setUpdatingPickup(false);
+    }
+  };
+
+  const handleCancelOrder = async (order: any) => {
+    if (!window.confirm(`Cancel order ${order.orderNumber}?`)) return;
+    const orderId = order._id || order.id;
+    setUpdatingPickup(true);
+    try {
+      const res = await api.updateOrderStatus(orderId, 'cancelled', 'Cancelled by customer');
+      const updated = res?.data || { ...order, status: 'cancelled' };
+      setOrders((prev) => prev.map((o) => ((o._id || o.id) === orderId ? { ...o, ...updated } : o)));
+      setSelectedOrder((prev: any) => (prev ? { ...prev, ...updated } : prev));
+      toast.success(`Order ${order.orderNumber} cancelled`);
+    } catch (err: any) {
+      toast.error(err.message || 'Could not cancel the order');
     } finally {
       setUpdatingPickup(false);
     }
@@ -203,104 +220,27 @@ export default function OrdersPage() {
     setUser(stored);
     fetchOrders(stored, selectedOrderIdParam);
 
-    // Real-time socket updates for customer orders
+    // Live data refresh for this customer's own orders (popups come from the bell)
     const socket = getSocket();
-    if (socket) {
-      const joinRooms = () => {
-        socket.emit('join_role_room', 'customer');
-      };
-
-      if (socket.connected) {
-        joinRooms();
-      }
-      socket.on('connect', joinRooms);
-
-      const handleOrderUpdate = (updatedOrder: any) => {
-        if (!updatedOrder) return;
-        const orderId = updatedOrder._id || updatedOrder.id;
-        const status = updatedOrder.status;
-        const orderNum = updatedOrder.orderNumber || (orderId || '').slice(-6).toUpperCase();
-
-        // Check if this updated order is in customer's order list
-        const isCustomerOrder =
-          ordersRef.current.some((o) => (o._id || o.id) === orderId) ||
-          (stored?.email && updatedOrder.customerEmail === stored.email);
-
-        if (isCustomerOrder) {
-          if (status === 'preparing') {
-            toast.info(`🍳 Kitchen Preparing Order #${orderNum}`, {
-              description: 'The kitchen chef has started preparing your food.',
-              duration: 6000,
-            });
-          } else if (status === 'ready') {
-            toast.success(
-              updatedOrder.orderType === 'takeaway'
-                ? `🥡 Order #${orderNum} is Ready for Pickup!`
-                : `🍽️ Order #${orderNum} is Ready!`,
-              {
-                description:
-                  updatedOrder.orderType === 'takeaway'
-                    ? 'Your takeaway food is ready! Collect your meal at the counter and click "Pick Up Food".'
-                    : 'Your food is hot and ready!',
-                duration: 7000,
-              }
-            );
-          } else if (status === 'served') {
-            toast.success(`🍽️ Order #${orderNum} Served`, {
-              description: 'Your food has been served to your table. Enjoy your meal!',
-              duration: 6000,
-            });
-          } else if (status === 'completed') {
-            toast.success(`✅ Order #${orderNum} Picked Up`, {
-              description: 'Takeaway food handover completed. Enjoy your meal!',
-              duration: 6000,
-            });
-          } else if (status === 'out_for_delivery') {
-            toast.info(`🛵 Order #${orderNum} Out for Delivery`, {
-              description: 'The delivery rider has picked up your food and is on the way.',
-              duration: 6000,
-            });
-          } else if (status === 'delivered') {
-            toast.success(`🏠 Order #${orderNum} Delivered`, {
-              description: 'Your order has been delivered. Enjoy your meal!',
-              duration: 6000,
-            });
-          }
-        }
-
-        setOrders((prev) =>
-          prev.map((o) =>
-            (o._id || o.id) === orderId ? { ...o, ...updatedOrder } : o
-          )
-        );
-        setSelectedOrder((prev: any) => {
-          if (!prev) return null;
-          if ((prev._id || prev.id) === orderId) {
-            return { ...prev, ...updatedOrder };
-          }
-          return prev;
-        });
-      };
-
-      // Listen for order updates with toast notifications for status changes
-      const handleCustomerUpdate = (data: any) => {
-        if (data._id || data.id) {
-          handleOrderUpdate(data);
-        }
-        fetchOrders(stored, selectedOrderIdParam);
-      };
-
-      socket.on('order:updated', handleOrderUpdate);
-      socket.on('order:status-change', handleOrderUpdate);
-      socket.on('order:customer_update', handleCustomerUpdate);
-
-      return () => {
-        socket.off('connect', joinRooms);
-        socket.off('order:updated', handleOrderUpdate);
-        socket.off('order:status-change', handleOrderUpdate);
-        socket.off('order:customer_update', handleCustomerUpdate);
-      };
-    }
+    if (!socket) return;
+    const handleOrderUpdate = (updatedOrder: any) => {
+      if (!updatedOrder) return;
+      const orderId = updatedOrder._id || updatedOrder.id;
+      setOrders((prev) => {
+        const exists = prev.some((o) => (o._id || o.id) === orderId);
+        return exists ? prev.map((o) => ((o._id || o.id) === orderId ? { ...o, ...updatedOrder } : o)) : [updatedOrder, ...prev];
+      });
+      setSelectedOrder((prev: any) => (prev && (prev._id || prev.id) === orderId ? { ...prev, ...updatedOrder } : prev));
+    };
+    const handleReconnect = () => fetchOrders(stored, null);
+    socket.on('order:updated', handleOrderUpdate);
+    socket.io.on('reconnect', handleReconnect);
+    return () => {
+      socket.off('order:updated', handleOrderUpdate);
+      socket.io.off('reconnect', handleReconnect);
+    };
+    // fetchOrders only depends on selectedOrderIdParam, which is already a dependency
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [router, selectedOrderIdParam]);
 
   const handleManualRefresh = () => {
@@ -560,7 +500,29 @@ export default function OrdersPage() {
                     })()}
 
                     {/* Takeaway Pick Up Food Action Card */}
-                    {selectedOrder.orderType === 'takeaway' && selectedOrder.status === 'ready' && (
+                    {selectedOrder.orderType === 'takeaway' && selectedOrder.status === 'ready' && selectedOrder.paymentStatus !== 'paid' && (
+                      <div className="mt-6 rounded-xl border-2 border-amber-400/60 bg-amber-50 p-4 text-sm text-amber-900 dark:bg-amber-950/30 dark:text-amber-200">
+                        <p className="font-bold">Your food is ready for pickup!</p>
+                        <p className="mt-1">Please pay {formatCurrency(selectedOrder.total)} at the counter — the cashier will hand over your order.</p>
+                      </div>
+                    )}
+
+                    {selectedOrder.status === 'new' && (
+                      <div className="mt-6 flex flex-col gap-3 rounded-xl border border-border bg-accent/30 p-4 sm:flex-row sm:items-center sm:justify-between">
+                        <p className="text-sm text-muted-foreground">Changed your mind? You can cancel until the kitchen starts cooking.</p>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="shrink-0 border-destructive/40 text-destructive hover:bg-destructive/10"
+                          disabled={updatingPickup}
+                          onClick={() => handleCancelOrder(selectedOrder)}
+                        >
+                          Cancel Order
+                        </Button>
+                      </div>
+                    )}
+
+                    {selectedOrder.orderType === 'takeaway' && selectedOrder.status === 'ready' && selectedOrder.paymentStatus === 'paid' && (
                       <div className="mt-6 rounded-xl border-2 border-emerald-500/50 bg-emerald-500/10 p-4 sm:p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4 shadow-sm animate-in fade-in slide-in-from-top-2">
                         <div className="flex items-center gap-3.5">
                           <div className="h-12 w-12 rounded-xl bg-emerald-500 text-white flex items-center justify-center shrink-0 shadow-sm">
@@ -762,5 +724,21 @@ export default function OrdersPage() {
         </div>
       </div>
     </div>
+  );
+}
+
+function OrdersPageContent() {
+  return (
+    <Suspense fallback={null}>
+      <OrdersPageInner />
+    </Suspense>
+  );
+}
+
+export default function OrdersPage() {
+  return (
+    <RequireRole roles={['customer']}>
+      <OrdersPageContent />
+    </RequireRole>
   );
 }
