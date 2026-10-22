@@ -30,12 +30,14 @@ export interface MenuCategory {
   id: string;
   name: string;
   icon: string;
+  image?: string;
   active: boolean;
   order: number;
 }
 
 export interface MenuItem {
   id: string;
+  categoryName?: string;
   name: string;
   description: string;
   price: number;
@@ -93,10 +95,16 @@ export interface Order {
   paymentStatus: PaymentStatus;
   paymentMethod?: PaymentMethod;
   status: OrderStatus;
+  waiterId?: string;
   waiterName?: string;
   cashierName?: string;
   kitchenStaffName?: string;
+  deliveryStaffId?: string;
   deliveryStaffName?: string;
+  customerId?: string;
+  customerEmail?: string;
+  seats?: string[];
+  couponCode?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
@@ -106,10 +114,11 @@ export interface Order {
 }
 
 export interface OrderItem {
+  menuItemId?: string;
   name: string;
   quantity: number;
   price: number;
-  modifiers?: string[];
+  modifiers?: (string | { name: string; price: number })[];
 }
 
 export interface Seat {

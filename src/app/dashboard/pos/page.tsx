@@ -10,9 +10,12 @@ import { Separator } from '@/components/ui/separator';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@/components/ui/dialog';
 import { Search, Plus, Minus, Trash2, ShoppingCart, Receipt, CreditCard, User } from 'lucide-react';
 import type { MenuItem, MenuCategory } from '@/lib/types';
+import { CategoryMenuBar } from '@/components/restaurant/category-menu-bar';
+import { FoodImage } from '@/components/restaurant/food-image';
 import { toast } from 'sonner';
 import { cn } from '@/lib/utils';
 import { api } from '@/lib/api';
+import { useRestaurantSettings, calcTax } from '@/hooks/use-restaurant-settings';
 import { getCouponMinSpend } from '@/lib/cart';
 
 const formatCurrency = (amount: number) =>
@@ -34,7 +37,10 @@ export default function POSPage() {
   const [cart, setCart] = useState<CartItem[]>([]);
   const [checkoutOpen, setCheckoutOpen] = useState(false);
   const [orderType, setOrderType] = useState<'dine-in' | 'takeaway' | 'delivery'>('dine-in');
-  const [tableNumber, setTableNumber] = useState('5');
+  const [tableNumber, setTableNumber] = useState('');
+  const [customerName, setCustomerName] = useState('');
+  const [customerPhone, setCustomerPhone] = useState('');
+  const settings = useRestaurantSettings();
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [paymentMethod, setPaymentMethod] = useState('Cash');
   const [processing, setProcessing] = useState(false);
@@ -52,7 +58,7 @@ export default function POSPage() {
   useEffect(() => {
     // Fetch live categories and menu items
     api.getCategories().then((cats) => {
-      if (cats && cats.length) setCategories(cats);
+      if (Array.isArray(cats)) setCategories(cats);
     }).catch(console.error);
 
     api.getMenuItems().then((items) => {
@@ -69,6 +75,10 @@ export default function POSPage() {
   }, [menuItems, activeCat, search]);
 
   const addToCart = (item: MenuItem) => {
+    if (!item.available) {
+      toast.error(`${item.name} is currently unavailable`);
+      return;
+    }
     setCart((prev) => {
       const itemId = item.id || (item as any)._id;
       const existing = prev.find((c) => c.menuItemId === itemId);
@@ -83,7 +93,7 @@ export default function POSPage() {
           menuItemId: itemId,
           name: item.name,
           image: item.image,
-          price: item.discountPrice || item.price,
+          price: item.discountPrice && item.discountPrice > 0 ? item.discountPrice : item.price,
           quantity: 1,
         },
       ];
@@ -131,7 +141,7 @@ export default function POSPage() {
     } else {
       newDiscount = couponValue;
     }
-    setDiscount(newDiscount);
+    setDiscount(Math.min(newDiscount, subtotal));
   }, [subtotal, appliedCoupon, couponType, couponValue, couponMinOrder, couponMaxDiscount]);
 
   const applyCoupon = async () => {
@@ -184,9 +194,9 @@ export default function POSPage() {
     toast.success('Coupon removed');
   };
 
-  const tax = Math.round(subtotal * 0.1);
-  // Delivery fee strictly for delivery orders only
-  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? 50 : 0;
+  const tax = calcTax(subtotal, settings.taxRate);
+  // Delivery fee strictly for delivery orders only (same value the server uses)
+  const deliveryFee = orderType === 'delivery' && cart.length > 0 ? settings.deliveryFee : 0;
   const total = Math.max(0, subtotal - discount + tax + deliveryFee);
 
   const handleCheckout = async () => {
@@ -194,45 +204,57 @@ export default function POSPage() {
       toast.error('Cart is empty');
       return;
     }
+    if (orderType === 'dine-in') {
+      const n = Number(tableNumber);
+      if (!Number.isInteger(n) || n < 1 || n > 25) {
+        toast.error('Enter a table number between 1 and 25');
+        return;
+      }
+    }
+    if (orderType === 'delivery' && !deliveryAddress.trim()) {
+      toast.error('Enter the delivery address');
+      return;
+    }
 
     setProcessing(true);
+    let createdOrder: any = null;
     try {
-      // 1. Create order
+      // 1. Create the order (server prices every item from the menu)
       const orderRes = await api.createOrder({
-        customerName: 'Walk-in Customer',
+        customerName: customerName.trim() || 'Walk-in Customer',
+        customerPhone: customerPhone.trim() || undefined,
         orderType,
-        tableNumber: orderType === 'dine-in' ? Number(tableNumber) || 1 : undefined,
-        address: orderType === 'delivery' ? deliveryAddress || 'Dhaka' : undefined,
-        subtotal,
-        discount,
+        tableNumber: orderType === 'dine-in' ? Number(tableNumber) : undefined,
+        address: orderType === 'delivery' ? deliveryAddress.trim() : undefined,
         couponCode: appliedCoupon || undefined,
-        tax,
-        deliveryFee,
-        total,
-        items: cart.map((c) => ({
-          menuItemId: c.menuItemId,
-          name: c.name,
-          quantity: c.quantity,
-          price: c.price,
-        })),
+        items: cart.map((c) => ({ menuItemId: c.menuItemId, name: c.name, quantity: c.quantity })),
       });
+      createdOrder = orderRes?.data;
 
-      const newOrder = orderRes?.order || orderRes?.data || orderRes;
-
-      // 2. Process payment (Cashier billing)
+      // 2. Take the payment once (cashier billing)
       const payMethodKey = paymentMethod.toLowerCase().replace(/ /g, '_');
       const payRes = await api.processPayment({
-        orderId: newOrder._id || newOrder.id,
-        amount: newOrder.total ?? total,
-        paymentMethod: payMethodKey === 'mobile_banking' ? 'mobile_banking' : payMethodKey === 'card' ? 'card' : 'cash',
+        orderId: createdOrder._id || createdOrder.id,
+        amount: createdOrder.total,
+        paymentMethod: ['card', 'mobile_banking', 'bank_transfer'].includes(payMethodKey) ? payMethodKey : 'cash',
       });
 
-      toast.success(`Payment completed! Receipt: ${payRes?.receiptNumber || 'REC-1025'}`);
+      toast.success(`Order ${createdOrder.orderNumber} paid — receipt ${payRes?.receiptNumber}`);
       setCart([]);
-      removeCoupon();
+      setAppliedCoupon(null);
+      setCouponCode('');
+      setDiscount(0);
+      setCustomerName('');
+      setCustomerPhone('');
       setCheckoutOpen(false);
     } catch (err: any) {
-      toast.error(err.message || 'Payment processing failed');
+      if (createdOrder) {
+        toast.error(`Order ${createdOrder.orderNumber} was sent to the kitchen but the payment failed: ${err.message}. Collect it from the Orders page.`);
+        setCart([]);
+        setCheckoutOpen(false);
+      } else {
+        toast.error(err.message || 'Could not create the order');
+      }
     } finally {
       setProcessing(false);
     }
@@ -246,7 +268,7 @@ export default function POSPage() {
           <h1 className="font-display text-2xl font-bold">POS / Cashier</h1>
           <p className="text-sm text-muted-foreground">Point of sale for fast order processing & payments</p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
           <Link
             href="/dashboard/pos"
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-3.5 py-2 text-sm font-semibold text-primary-foreground shadow-sm"
@@ -280,28 +302,39 @@ export default function POSPage() {
             <Input placeholder="Search menu items..." value={search} onChange={(e) => setSearch(e.target.value)} className="pl-10" />
           </div>
 
-          {/* Categories */}
-          <div className="flex flex-wrap gap-2">
-            <button onClick={() => setActiveCat('all')} className={cn('rounded-full px-3 py-1.5 text-xs font-medium', activeCat === 'all' ? 'bg-primary text-primary-foreground' : 'bg-accent hover:bg-secondary')}>
-              All
-            </button>
-            {categories.map((cat) => (
-              <button key={cat.id} onClick={() => setActiveCat(cat.id)} className={cn('flex items-center gap-1 rounded-full px-3 py-1.5 text-xs font-medium', activeCat === cat.id ? 'bg-primary text-primary-foreground' : 'bg-accent hover:bg-secondary')}>
-                <span>{cat.icon}</span> {cat.name}
-              </button>
-            ))}
-          </div>
+          {/* Categories — each chip opens a dropdown of its dishes; pick one to add it */}
+          <CategoryMenuBar
+            size="sm"
+            categories={categories}
+            items={menuItems}
+            active={activeCat}
+            onActiveChange={setActiveCat}
+            onPickItem={(item) => {
+              addToCart(item);
+              toast.success(`${item.name} added`, { duration: 1200 });
+            }}
+            pickLabel="+ Add"
+            showAllLabel={(c) => `Show all ${c.name} in the grid`}
+          />
 
           {/* Menu Grid */}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
             {filteredItems.map((item) => (
-              <button key={item.id} onClick={() => addToCart(item)} className="group flex flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-all hover:border-primary hover:shadow-md">
+              <button
+                key={item.id}
+                onClick={() => addToCart(item)}
+                disabled={!item.available}
+                className="group relative flex flex-col overflow-hidden rounded-xl border border-border bg-card text-left transition-all hover:border-primary hover:shadow-md disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:border-border disabled:hover:shadow-none"
+              >
                 <div className="aspect-square overflow-hidden">
-                  <img src={item.image} alt={item.name} className="h-full w-full object-cover transition-transform group-hover:scale-110" />
+                  <FoodImage src={item.image} alt={item.name} className="h-full w-full object-cover transition-transform group-hover:scale-110" />
                 </div>
+                {!item.available && (
+                  <span className="absolute left-2 top-2 rounded bg-destructive px-1.5 py-0.5 text-[10px] font-semibold text-destructive-foreground">Unavailable</span>
+                )}
                 <div className="p-2">
                   <p className="truncate text-xs font-semibold">{item.name}</p>
-                  <p className="text-sm font-bold text-primary">{formatCurrency(item.discountPrice || item.price)}</p>
+                  <p className="text-sm font-bold text-primary">{formatCurrency(item.discountPrice && item.discountPrice > 0 ? item.discountPrice : item.price)}</p>
                 </div>
               </button>
             ))}
@@ -310,7 +343,7 @@ export default function POSPage() {
 
         {/* Cart Section */}
         <div className="lg:col-span-1">
-          <Card className="sticky top-20 flex max-h-[calc(100vh-6rem)] flex-col">
+          <Card className="flex flex-col lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)]">
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-lg">
                 <ShoppingCart className="h-5 w-5" /> Current Order
@@ -328,7 +361,7 @@ export default function POSPage() {
                   <div className="space-y-3">
                     {cart.map((item) => (
                       <div key={item.menuItemId} className="flex items-center gap-2 rounded-lg border border-border/60 p-2">
-                        <img src={item.image} alt={item.name} className="h-12 w-12 rounded-lg object-cover" />
+                        <FoodImage src={item.image} alt={item.name} className="h-12 w-12 shrink-0 rounded-lg object-cover" />
                         <div className="min-w-0 flex-1">
                           <p className="truncate text-xs font-medium">{item.name}</p>
                           <p className="text-sm font-bold text-primary">{formatCurrency(item.price)}</p>
@@ -361,7 +394,7 @@ export default function POSPage() {
                       <span>-{formatCurrency(discount)}</span>
                     </div>
                   )}
-                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
+                  <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax ({settings.taxRate}%)</span><span>{formatCurrency(tax)}</span></div>
                   <Separator />
                   <div className="flex justify-between font-bold"><span>Total</span><span className="text-primary text-lg">{formatCurrency(total)}</span></div>
 
@@ -430,10 +463,21 @@ export default function POSPage() {
               </div>
             </div>
 
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+              <div>
+                <p className="mb-2 text-sm font-medium">Customer Name</p>
+                <Input placeholder="Walk-in Customer" value={customerName} onChange={(e) => setCustomerName(e.target.value)} />
+              </div>
+              <div>
+                <p className="mb-2 text-sm font-medium">Phone (optional)</p>
+                <Input placeholder="01XXXXXXXXX" value={customerPhone} onChange={(e) => setCustomerPhone(e.target.value)} inputMode="tel" />
+              </div>
+            </div>
+
             {orderType === 'dine-in' && (
               <div>
-                <p className="mb-2 text-sm font-medium">Table Number</p>
-                <Input placeholder="e.g. 5" value={tableNumber} onChange={(e) => setTableNumber(e.target.value)} />
+                <p className="mb-2 text-sm font-medium">Table Number (1–25)</p>
+                <Input placeholder="e.g. 5" type="number" min={1} max={25} value={tableNumber} onChange={(e) => setTableNumber(e.target.value)} />
               </div>
             )}
 
@@ -463,7 +507,7 @@ export default function POSPage() {
                   <span>-{formatCurrency(discount)}</span>
                 </div>
               )}
-              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax (10%)</span><span>{formatCurrency(tax)}</span></div>
+              <div className="flex justify-between text-sm"><span className="text-muted-foreground">Tax ({settings.taxRate}%)</span><span>{formatCurrency(tax)}</span></div>
               {deliveryFee > 0 && (
                 <div className="flex justify-between text-sm"><span className="text-muted-foreground">Delivery Fee</span><span>{formatCurrency(deliveryFee)}</span></div>
               )}

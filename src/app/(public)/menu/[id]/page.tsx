@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useMemo, useEffect } from 'react';
+import { useState, useMemo, useEffect, useCallback } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import { Button } from '@/components/ui/button';
@@ -10,25 +10,27 @@ import { RadioGroup, RadioGroupItem } from '@/components/ui/radio-group';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Label } from '@/components/ui/label';
 import { ArrowLeft, Plus, Minus, Star, Clock, ShoppingBag, Check, Lock } from 'lucide-react';
-import { menuItems as fallbackMenuItems, categories as fallbackCategories, reviews as fallbackReviews } from '@/lib/mock-data';
 import { toast } from 'sonner';
 import { cn, formatCurrency } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { addToCart } from '@/lib/cart';
 import { getStoredUser } from '@/lib/auth';
 import type { MenuItem, MenuCategory, Review } from '@/lib/types';
+import { FoodImage } from '@/components/restaurant/food-image';
 
 export default function MenuItemDetailPage() {
   const params = useParams();
   const router = useRouter();
   const idStr = Array.isArray(params?.id) ? params.id[0] : (params?.id as string);
 
-  const [item, setItem] = useState<MenuItem | null>(() => {
-    return fallbackMenuItems.find((m) => m.id === idStr) || null;
-  });
-  const [categoriesList, setCategoriesList] = useState<MenuCategory[]>(fallbackCategories);
-  const [reviewsList, setReviewsList] = useState<Review[]>(fallbackReviews);
-  const [loading, setLoading] = useState(!item);
+  const [item, setItem] = useState<MenuItem | null>(null);
+  const [categoriesList, setCategoriesList] = useState<MenuCategory[]>([]);
+  const [reviewsList, setReviewsList] = useState<Review[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [reviewRating, setReviewRating] = useState(5);
+  const [reviewComment, setReviewComment] = useState('');
+  const [postingReview, setPostingReview] = useState(false);
+  const [isCustomer, setIsCustomer] = useState(false);
 
   const [quantity, setQuantity] = useState(1);
   const [selectedOptions, setSelectedOptions] = useState<Record<string, string | string[]>>({});
@@ -36,8 +38,39 @@ export default function MenuItemDetailPage() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
 
   useEffect(() => {
-    setIsLoggedIn(!!getStoredUser());
+    const u = getStoredUser();
+    setIsLoggedIn(!!u);
+    setIsCustomer(u?.role === 'customer');
   }, []);
+
+  const loadReviews = useCallback(() => {
+    if (!idStr) return;
+    api
+      .getReviews(idStr)
+      .then((revs) => setReviewsList((Array.isArray(revs) ? revs : []).map((r: any) => ({ ...r, id: r._id || r.id }))))
+      .catch(console.error);
+  }, [idStr]);
+
+  const submitReview = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!reviewComment.trim()) {
+      toast.error('Please write a short comment');
+      return;
+    }
+    setPostingReview(true);
+    try {
+      await api.createReview({ rating: reviewRating, comment: reviewComment.trim(), menuItemId: idStr });
+      toast.success('Thanks for your review!');
+      setReviewComment('');
+      setReviewRating(5);
+      loadReviews();
+      api.getMenuItemById(idStr).then((res) => res && setItem({ ...res, id: res._id || res.id })).catch(() => undefined);
+    } catch (err: any) {
+      toast.error(err.message || 'Could not post your review');
+    } finally {
+      setPostingReview(false);
+    }
+  };
 
   useEffect(() => {
     if (!idStr) return;
@@ -47,33 +80,17 @@ export default function MenuItemDetailPage() {
       if (cats && cats.length) setCategoriesList(cats.map((c: any) => ({ ...c, id: c._id || c.id })));
     }).catch(console.error);
 
-    // Fetch live reviews
-    api.getReviews().then((revs) => {
-      if (revs && revs.length) setReviewsList(revs.map((r: any) => ({ ...r, id: r._id || r.id })));
-    }).catch(console.error);
+    // Reviews written for this dish
+    loadReviews();
 
-    // Try fetching item by ID or finding in all items
-    api.getMenuItemById(idStr).then((res) => {
-      if (res) {
-        setItem({ ...res, id: res._id || res.id });
-        setLoading(false);
-      } else {
-        // Fallback to checking full list
-        return api.getMenuItems().then((all) => {
-          const found = all.find((x: any) => (x._id || x.id) === idStr);
-          if (found) setItem({ ...found, id: found._id || found.id });
-          setLoading(false);
-        });
-      }
-    }).catch(() => {
-      // Check fallback
-      const found = fallbackMenuItems.find((m) => m.id === idStr);
-      if (found) setItem(found);
-      setLoading(false);
-    });
-  }, [idStr]);
+    api
+      .getMenuItemById(idStr)
+      .then((res) => setItem(res ? { ...res, id: res._id || res.id } : null))
+      .catch(() => setItem(null))
+      .finally(() => setLoading(false));
+  }, [idStr, loadReviews]);
 
-  const itemReviews = reviewsList.filter((r) => r.rating >= 4).slice(0, 3);
+  const itemReviews = reviewsList.slice(0, 6);
 
   const modifierPrice = useMemo(() => {
     if (!item?.modifiers) return 0;
@@ -117,6 +134,16 @@ export default function MenuItemDetailPage() {
       return;
     }
 
+    const missing = (item.modifiers || []).find((mod) => {
+      if (!mod.required) return false;
+      const sel = selectedOptions[mod.id];
+      return !sel || (Array.isArray(sel) && sel.length === 0);
+    });
+    if (missing) {
+      toast.error(`Please choose ${missing.name}`);
+      return;
+    }
+
     const selectedMods: { name: string; price: number }[] = [];
     if (item.modifiers) {
       item.modifiers.forEach((mod) => {
@@ -133,7 +160,10 @@ export default function MenuItemDetailPage() {
       });
     }
 
-    addToCart(item, quantity, selectedMods);
+    if (!addToCart(item, quantity, selectedMods)) {
+      toast.info('Staff accounts take orders through the POS in the dashboard.');
+      return;
+    }
     setAdded(true);
     toast.success(`${quantity} × ${item.name} added to cart`);
     setTimeout(() => setAdded(false), 2000);
@@ -172,7 +202,7 @@ export default function MenuItemDetailPage() {
       <div className="grid grid-cols-1 gap-8 md:grid-cols-2">
         {/* Image */}
         <div className="relative overflow-hidden rounded-2xl">
-          <img src={item.image} alt={item.name} className="h-full w-full object-cover" />
+          <FoodImage src={item.image} alt={item.name} className="aspect-[4/3] h-full w-full object-cover" />
           {item.discountPrice && (
             <span className="absolute left-4 top-4 rounded-full bg-destructive px-3 py-1 text-sm font-bold text-white">
               {Math.round((1 - item.discountPrice / item.price) * 100)}% OFF
@@ -199,8 +229,14 @@ export default function MenuItemDetailPage() {
           <div className="mt-4 flex flex-wrap items-center gap-4">
             <div className="flex items-center gap-1">
               <Star className="h-4 w-4 fill-warning text-warning" />
-              <span className="font-semibold">{item.rating}</span>
-              <span className="text-sm text-muted-foreground">({item.reviewCount} reviews)</span>
+              {item.reviewCount > 0 ? (
+                <>
+                  <span className="font-semibold">{item.rating}</span>
+                  <span className="text-sm text-muted-foreground">({item.reviewCount} {item.reviewCount === 1 ? 'review' : 'reviews'})</span>
+                </>
+              ) : (
+                <span className="text-sm text-muted-foreground">New dish — no reviews yet</span>
+              )}
             </div>
             <div className="flex items-center gap-1 text-sm text-muted-foreground">
               <Clock className="h-4 w-4" /> {item.prepTime} min
@@ -304,27 +340,62 @@ export default function MenuItemDetailPage() {
       {/* Reviews */}
       <div className="mt-12">
         <h2 className="mb-4 font-display text-2xl font-bold">Customer Reviews</h2>
-        <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
-          {itemReviews.map((rev) => (
-            <div key={rev.id} className="rounded-lg border p-4">
-              <div className="mb-2 flex items-center gap-2">
-                <div className="flex">{Array.from({ length: 5 }).map((_, i) => (
-                  <Star key={i} className={cn('h-4 w-4', i < rev.rating ? 'fill-warning text-warning' : 'text-muted-foreground/30')} />
-                ))}</div>
-              </div>
-              <p className="mb-3 text-sm text-muted-foreground">"{rev.comment}"</p>
-              <div className="flex items-center gap-2">
-                <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
-                  {rev.customerName.charAt(0)}
+        {itemReviews.length === 0 ? (
+          <p className="text-sm text-muted-foreground">No reviews for this dish yet.</p>
+        ) : (
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+            {itemReviews.map((rev) => (
+              <div key={rev.id} className="rounded-lg border p-4">
+                <div className="mb-2 flex">
+                  {Array.from({ length: 5 }).map((_, i) => (
+                    <Star key={i} className={cn('h-4 w-4', i < rev.rating ? 'fill-warning text-warning' : 'text-muted-foreground/30')} />
+                  ))}
                 </div>
-                <div>
-                  <p className="text-sm font-medium">{rev.customerName}</p>
-                  <p className="text-xs text-muted-foreground">{rev.date}</p>
+                <p className="mb-3 break-words text-sm text-muted-foreground">&ldquo;{rev.comment}&rdquo;</p>
+                <div className="flex items-center gap-2">
+                  <div className="flex h-8 w-8 items-center justify-center rounded-full bg-primary/10 text-sm font-bold text-primary">
+                    {rev.customerName.charAt(0)}
+                  </div>
+                  <div>
+                    <p className="text-sm font-medium">{rev.customerName}</p>
+                    <p className="text-xs text-muted-foreground">{rev.date}</p>
+                  </div>
                 </div>
               </div>
+            ))}
+          </div>
+        )}
+
+        {isCustomer ? (
+          <form onSubmit={submitReview} className="mt-6 max-w-xl space-y-3 rounded-lg border p-4">
+            <p className="font-medium">Rate this dish</p>
+            <div className="flex gap-1" role="radiogroup" aria-label="Rating">
+              {[1, 2, 3, 4, 5].map((n) => (
+                <button key={n} type="button" onClick={() => setReviewRating(n)} aria-label={`${n} star${n > 1 ? 's' : ''}`} aria-checked={reviewRating === n} role="radio">
+                  <Star className={cn('h-6 w-6', n <= reviewRating ? 'fill-warning text-warning' : 'text-muted-foreground/30')} />
+                </button>
+              ))}
             </div>
-          ))}
-        </div>
+            <textarea
+              value={reviewComment}
+              onChange={(e) => setReviewComment(e.target.value)}
+              rows={3}
+              maxLength={1000}
+              placeholder="What did you think?"
+              className="w-full rounded-md border border-input bg-background px-3 py-2 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            />
+            <Button type="submit" disabled={postingReview}>
+              {postingReview ? 'Posting…' : 'Post Review'}
+            </Button>
+          </form>
+        ) : !isLoggedIn ? (
+          <p className="mt-6 text-sm text-muted-foreground">
+            <Link href={`/login?redirect=/menu/${idStr}`} className="font-medium text-primary hover:underline">
+              Sign in
+            </Link>{' '}
+            to review this dish.
+          </p>
+        ) : null}
       </div>
     </div>
   );

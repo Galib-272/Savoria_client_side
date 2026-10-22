@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import type { MenuItem } from '@/lib/types';
 import { formatCurrency } from '@/lib/utils';
+import { FoodImage } from '@/components/restaurant/food-image';
 import { getStoredUser } from '@/lib/auth';
 import { toast } from 'sonner';
 
@@ -47,16 +48,16 @@ export function FoodCard({ item, onAddToCart }: FoodCardProps) {
   return (
     <Card className="group overflow-hidden border-border/60 transition-all duration-300 hover:shadow-xl hover:-translate-y-1">
       <Link href={`/menu/${item.id}`} className="block relative aspect-[4/3] overflow-hidden">
-        <img
+        <FoodImage
           src={item.image}
           alt={item.name}
           className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-110"
         />
-        {item.discountPrice && (
+        {item.discountPrice && item.discountPrice > 0 && item.discountPrice < item.price ? (
           <Badge className="absolute left-3 top-3 bg-primary text-primary-foreground">
             {Math.round((1 - item.discountPrice / item.price) * 100)}% OFF
           </Badge>
-        )}
+        ) : null}
         {!item.available && (
           <div className="absolute inset-0 flex items-center justify-center bg-background/70">
             <Badge variant="destructive">Unavailable</Badge>
@@ -74,10 +75,14 @@ export function FoodCard({ item, onAddToCart }: FoodCardProps) {
           <Link href={`/menu/${item.id}`} className="truncate font-display text-base font-semibold hover:text-primary transition-colors">
             {item.name}
           </Link>
-          <div className="flex shrink-0 items-center gap-1">
-            <Star className="h-3.5 w-3.5 fill-warning text-warning" />
-            <span className="text-sm font-medium">{item.rating}</span>
-          </div>
+          {item.reviewCount > 0 || item.rating > 0 ? (
+            <div className="flex shrink-0 items-center gap-1">
+              <Star className="h-3.5 w-3.5 fill-warning text-warning" />
+              <span className="text-sm font-medium">{item.rating}</span>
+            </div>
+          ) : (
+            <span className="shrink-0 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-semibold text-primary">New</span>
+          )}
         </div>
 
         <p className="mb-3 line-clamp-2 text-sm text-muted-foreground">{item.description}</p>
@@ -90,7 +95,7 @@ export function FoodCard({ item, onAddToCart }: FoodCardProps) {
 
         <div className="flex items-center justify-between">
           <div className="flex items-baseline gap-2">
-            {item.discountPrice ? (
+            {item.discountPrice && item.discountPrice > 0 && item.discountPrice < item.price ? (
               <>
                 <span className="text-lg font-bold text-primary">{formatCurrency(item.discountPrice)}</span>
                 <span className="text-sm text-muted-foreground line-through">{formatCurrency(item.price)}</span>

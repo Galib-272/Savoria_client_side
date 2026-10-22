@@ -8,7 +8,9 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { FoodCard } from '@/components/restaurant/food-card';
-import { menuItems as fallbackMenuItems, offers as fallbackOffers, reviews as fallbackReviews, restaurantInfo as fallbackRestaurantInfo, categories as fallbackCategories } from '@/lib/mock-data';
+import { CategoryMenuBar } from '@/components/restaurant/category-menu-bar';
+import { restaurantInfo as fallbackRestaurantInfo } from '@/lib/mock-data';
+import { couponsToOffers, type OfferCard } from '@/lib/offers';
 import { formatCurrency } from '@/lib/utils';
 import { api } from '@/lib/api';
 import { addToCart } from '@/lib/cart';
@@ -43,12 +45,15 @@ const stats = [
 
 export default function HomePage() {
   const [currentSlide, setCurrentSlide] = useState(0);
-  const [items, setItems] = useState<MenuItem[]>(fallbackMenuItems);
-  const [cats, setCats] = useState<MenuCategory[]>(fallbackCategories);
-  const [userReviews, setUserReviews] = useState<Review[]>(fallbackReviews);
+  const [items, setItems] = useState<MenuItem[]>([]);
+  const [cats, setCats] = useState<MenuCategory[]>([]);
+  const [userReviews, setUserReviews] = useState<Review[]>([]);
+  const [offers, setOffers] = useState<OfferCard[]>([]);
   const [restaurant, setRestaurant] = useState(fallbackRestaurantInfo);
 
   useEffect(() => {
+    api.getCoupons().then((data) => setOffers(couponsToOffers((Array.isArray(data) ? data : []).map((c: any) => ({ ...c, id: c._id || c.id }))))).catch(() => undefined);
+
     // Fetch live menu items
     api.getMenuItems().then((data) => {
       if (data && data.length > 0) {
@@ -102,6 +107,8 @@ export default function HomePage() {
     const added = addToCart(item, 1);
     if (added) {
       toast.success(`${item.name} added to cart`);
+    } else {
+      toast.info('Staff accounts take orders through the POS in the dashboard.');
     }
   };
 
@@ -201,18 +208,19 @@ export default function HomePage() {
             <h2 className="font-display text-3xl font-bold">Browse by Category</h2>
             <p className="mt-2 text-muted-foreground">Explore our diverse menu categories</p>
           </div>
-          <div className="grid grid-cols-3 gap-4 sm:grid-cols-5 lg:grid-cols-9">
-            {cats.map((cat) => (
-              <Link
-                key={cat.id}
-                href={`/menu?category=${cat.id}`}
-                className="group flex flex-col items-center gap-2 rounded-xl border border-border/60 bg-card p-4 transition-all hover:border-primary hover:shadow-md"
-              >
-                <span className="text-3xl transition-transform group-hover:scale-110">{cat.icon}</span>
-                <span className="text-xs font-medium text-foreground">{cat.name}</span>
-              </Link>
-            ))}
-          </div>
+          <CategoryMenuBar
+            variant="tiles"
+            showAllChip={false}
+            categories={cats}
+            items={items}
+            active=""
+            onActiveChange={() => undefined}
+            onPickItem={(item) => router.push(`/menu/${item.id}`)}
+            pickLabel="View"
+            allowUnavailable
+            onShowAll={(cat) => router.push(`/menu?category=${cat.id}`)}
+            showAllLabel={(cat) => `Open ${cat.name} on the menu page`}
+          />
         </div>
       </section>
 
@@ -222,7 +230,7 @@ export default function HomePage() {
           <div className="mb-8 flex items-end justify-between">
             <div>
               <h2 className="font-display text-3xl font-bold">Featured Dishes</h2>
-              <p className="mt-2 text-muted-foreground">Chef's special selections just for you</p>
+              <p className="mt-2 text-muted-foreground">Chef&apos;s special selections just for you</p>
             </div>
             <Link href="/menu">
               <Button variant="outline" className="hidden sm:flex">
@@ -266,10 +274,10 @@ export default function HomePage() {
         <div className="mx-auto max-w-7xl px-4 text-foreground sm:px-6 lg:px-8">
           <div className="mb-8 text-center">
             <h2 className="font-display text-3xl font-bold">Special Offers</h2>
-            <p className="mt-2 text-muted-foreground">Don't miss out on these amazing deals</p>
+            <p className="mt-2 text-muted-foreground">Don&apos;t miss out on these amazing deals</p>
           </div>
           <div className="grid grid-cols-1 gap-6 sm:grid-cols-2 lg:grid-cols-4">
-            {fallbackOffers.map((offer) => (
+            {offers.map((offer) => (
               <div
                 key={offer.id}
                 className={`relative overflow-hidden rounded-2xl bg-gradient-to-br ${offer.color} p-6 text-white shadow-lg transition-transform hover:scale-105`}
@@ -350,7 +358,7 @@ export default function HomePage() {
                     />
                   ))}
                 </div>
-                <p className="mb-4 text-sm text-muted-foreground">"{review.comment}"</p>
+                <p className="mb-4 text-sm text-muted-foreground">&ldquo;{review.comment}&rdquo;</p>
                 <div className="flex items-center gap-3">
                   <div className="flex h-10 w-10 items-center justify-center rounded-full bg-primary/10 text-primary font-semibold">
                     {review.customerName?.charAt(0) || 'C'}
