@@ -18,6 +18,8 @@ export interface AppNotification {
   reservationId?: string;
   tableNumber?: number;
   targetRoles?: string[];
+  /** true when the signed-in user caused this event themselves */
+  self?: boolean;
 }
 
 /** "Just now", "5 min ago", "2 hr ago", "Oct 21" */
@@ -77,7 +79,8 @@ export function useNotifications(options: Options = {}) {
       if (!n?.id || seen.current.has(n.id)) return; // never show the same notification twice
       seen.current.add(n.id);
       setItems((prev) => [{ ...n, read: false }, ...prev].slice(0, 50));
-      toast(n.title, { description: n.message, duration: 6000, action: toastActionRef.current?.(n) });
+      // your own action already shows its own confirmation, so it only lands in the bell (no second popup)
+      if (!n.self) toast(n.title, { description: n.message, duration: 6000, action: toastActionRef.current?.(n) });
     };
     const onReadOne = ({ id }: { id: string }) => setItems((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
     const onReadAll = () => setItems((prev) => prev.map((n) => ({ ...n, read: true })));
