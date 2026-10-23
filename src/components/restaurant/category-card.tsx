@@ -57,6 +57,8 @@ export const CategoryCard = forwardRef<HTMLDivElement, CategoryCardProps>(functi
             src={cover}
             alt={category.name}
             icon={category.icon}
+            // if the category photo is broken, use one of its dishes' photos instead
+            fallbacks={dishes.slice(0, 4).map((d) => d.image)}
             className="h-full w-full object-cover transition-transform duration-500 group-hover:scale-105"
           />
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-t from-black/55 via-black/0 to-black/0" />
